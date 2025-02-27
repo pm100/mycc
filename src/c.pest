@@ -1,0 +1,8 @@
+program    =  { SOI ~ function ~ EOI }
+function   =  { "int" ~ identifier ~ "(" ~ "void" ~ ")" ~ "{" ~ statement ~ "}" }
+statement  =  { "return" ~ expression ~ ";" }
+expression =  { int }
+identifier =  { (ASCII_ALPHA | "_") ~ (ASCII_ALPHA | ASCII_DIGIT | "_")* }
+int        =  { ("+" | "-")? ~ ASCII_DIGIT+ }
+WHITESPACE = _{ " " | "\t" | "\n" | "\r" }
+COMMENT    = _{ ("//" ~ (!"\n" ~ ANY)*) | ("/*" ~ (!"*/" ~ ANY)* ~ "*/") }
