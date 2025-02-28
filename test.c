@@ -1,5 +1,5 @@
 int main(void){
 
     // comment
-    return 100;
+    return ~(-2);
 }

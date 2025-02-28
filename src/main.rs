@@ -1,10 +1,11 @@
+pub mod compiler;
 pub mod cpp;
-pub mod parser;
 pub mod tacky;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::Parser;
+use compiler::Compiler;
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -28,7 +29,8 @@ fn main() -> ExitCode {
     println!("source: {:?}", cli.source);
 
     let input = std::fs::read_to_string(&cli.source).unwrap();
-    let parsed = parser::parse(&input);
+    let mut compiler = Compiler::new();
+    let parsed = compiler.run(&input);
     if parsed.is_err() {
         eprintln!("{}", parsed.err().unwrap());
         return ExitCode::FAILURE;
