@@ -1,6 +1,9 @@
 pub mod compiler;
 pub mod cpp;
+pub mod parser;
 pub mod tacky;
+
+pub mod lexer;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -28,29 +31,37 @@ fn main() -> ExitCode {
     println!("codegen: {:?}", cli.codegen);
     println!("source: {:?}", cli.source);
 
-    let input = std::fs::read_to_string(&cli.source).unwrap();
-    let mut compiler = Compiler::new();
-    let parsed = compiler.run(&input);
-    if parsed.is_err() {
-        eprintln!("{}", parsed.err().unwrap());
-        return ExitCode::FAILURE;
-    }
-    if cli.lex {
-        println!("lexing");
-        //return std::process::ExitCode::SUCCESS;
-        return 0u8.into();
-    }
+    // let mut lexer = lexer::Lexer::new(cli.source);
+    // while let Some(token) = lexer.next_token() {
+    //     println!("{:?}", token);
+    // }
 
-    if cli.parse {
-        println!("parsing");
-        return ExitCode::SUCCESS;
-    }
+    let mut parser = parser::Parser::new(cli.source);
+    parser.parse();
 
-    if cli.codegen {
-        println!("codegening");
-        return ExitCode::SUCCESS;
-    }
+    // let input = std::fs::read_to_string(&cli.source).unwrap();
+    // let mut compiler = Compiler::new();
+    // let parsed = compiler.run(&input);
+    // if parsed.is_err() {
+    //     eprintln!("{}", parsed.err().unwrap());
+    //     return ExitCode::FAILURE;
+    // }
+    // if cli.lex {
+    //     println!("lexing");
+    //     //return std::process::ExitCode::SUCCESS;
+    //     return 0u8.into();
+    // }
 
-    println!("compiling");
+    // if cli.parse {
+    //     println!("parsing");
+    //     return ExitCode::SUCCESS;
+    // }
+
+    // if cli.codegen {
+    //     println!("codegening");
+    //     return ExitCode::SUCCESS;
+    // }
+
+    // println!("compiling");
     return ExitCode::SUCCESS;
 }
