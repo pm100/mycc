@@ -1,9 +1,4 @@
-use anyhow::Result;
-#[derive(Debug)]
-pub enum LexReturn {
-    Token(Token),
-    Error,
-}
+use anyhow::{bail, Result};
 
 pub struct Lexer {
     reader: LineReader,
@@ -11,7 +6,7 @@ pub struct Lexer {
     current_pos: usize,
     current_line_number: usize,
 }
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum Token {
     // punctuation
     LeftParen,
@@ -27,14 +22,18 @@ pub enum Token {
     // operators
     Complement,
     Negate,
+    Divide,
 
     // keywords
     Int,
     Void,
     Return,
+
+    // special
+    Eof,
 }
 impl Lexer {
-    pub fn new(path: PathBuf) -> Self {
+    pub fn new(path: &Path) -> Self {
         let reader = LineReader::open(path).unwrap();
         Self {
             reader,
@@ -44,13 +43,13 @@ impl Lexer {
         }
     }
 
-    pub fn next_token(&mut self) -> Option<LexReturn> {
+    pub fn next_token(&mut self) -> Result<Token> {
         loop {
             if self.at_end() {
                 match self.reader.read_line(&mut self.current_line) {
                     Some(Ok(_)) => (),
                     Some(Err(e)) => panic!("Error reading line: {}", e),
-                    None => return None,
+                    None => return Ok(Token::Eof),
                 }
                 self.current_line = self.current_line.trim().to_string();
                 self.current_pos = 0;
@@ -62,36 +61,52 @@ impl Lexer {
             };
 
             let char = self.advance();
-            match char {
-                '(' => return Some(LexReturn::Token(Token::LeftParen)),
-                ')' => return Some(LexReturn::Token(Token::RightParen)),
-                '{' => return Some(LexReturn::Token(Token::LeftBrace)),
-                '}' => return Some(LexReturn::Token(Token::RightBrace)),
-                ';' => return Some(LexReturn::Token(Token::SemiColon)),
+            let token = match char {
+                '(' => Token::LeftParen,
+                ')' => Token::RightParen,
+                '{' => Token::LeftBrace,
+                '}' => Token::RightBrace,
+                ';' => Token::SemiColon,
 
                 '/' => {
                     if self.match_next('/') {
                         self.current_line.clear();
                         continue;
                     }
+                    if self.match_next('*') {
+                        while !self.at_end() {
+                            if self.match_next('*') && self.match_next('/') {
+                                break;
+                            }
+                            self.advance();
+                        }
+                        continue;
+                    }
+                    Token::Divide
                 }
                 ' ' | '\t' => continue,
 
-                '~' => return Some(LexReturn::Token(Token::Complement)),
-                '-' => return Some(LexReturn::Token(Token::Negate)),
+                '~' => Token::Complement,
+                '-' => Token::Negate,
 
                 _ => {
-                    return {
-                        if char.is_digit(10) {
-                            Some(LexReturn::Token(self.number()))
-                        } else if char.is_alphabetic() {
-                            Some(LexReturn::Token(self.identifier()))
-                        } else {
-                            Some(LexReturn::Error)
+                    if char.is_digit(10) {
+                        let t = self.number();
+                        // reject 123foo
+                        if self.peek().is_alphabetic() {
+                            println!("Error: unexpected character: {}", self.peek());
+                            bail!("bad character")
                         }
+                        t
+                    } else if char.is_alphabetic() {
+                        self.identifier()
+                    } else {
+                        println!("Error: unexpected character: {}", char);
+                        bail!("bad character")
                     }
                 }
-            }
+            };
+            return Ok(token);
         }
         //   self.current_line.clear();
         //  Some(LexReturn::Token(Token::Constant(42)))
@@ -157,7 +172,7 @@ use core::panic;
 use std::{
     fs::File,
     io::{self, prelude::*},
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 struct LineReader {

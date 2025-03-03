@@ -5,7 +5,8 @@ use std::{
     process::{Command, Stdio},
 };
 
-type Result<T> = std::result::Result<T, Error>;
+//type Result<T> = std::result::Result<T, Error>;
+use anyhow::{anyhow, Result};
 
 lazy_static::lazy_static! {
     static ref COMPILER: Option<Compiler> = match Compiler::find() {
@@ -17,11 +18,11 @@ lazy_static::lazy_static! {
     };
 }
 
-pub enum Error {
+pub enum CppError {
     Error(Box<dyn std::error::Error>),
     String(String),
 }
-impl std::fmt::Debug for Error {
+impl std::fmt::Debug for CppError {
     #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -30,7 +31,7 @@ impl std::fmt::Debug for Error {
         }
     }
 }
-impl std::fmt::Display for Error {
+impl std::fmt::Display for CppError {
     #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -39,7 +40,7 @@ impl std::fmt::Display for Error {
         }
     }
 }
-impl<E: std::error::Error + 'static> From<E> for Error {
+impl<E: std::error::Error + 'static> From<E> for CppError {
     #[inline]
     fn from(value: E) -> Self {
         Self::Error(Box::new(value) as _)
@@ -48,8 +49,9 @@ impl<E: std::error::Error + 'static> From<E> for Error {
 
 fn capture(process: std::process::Child) -> Result<Vec<u8>> {
     let output = process.wait_with_output()?;
+    // return Err(anyhow!(CppError::String("foo".to_string())));
     if !output.status.success() {
-        return Err(Error::String(format!(
+        return Err(anyhow!(format!(
             "Error code: {}\n\n{}",
             output.status.code().unwrap_or(-1),
             String::from_utf8_lossy(&output.stderr)
@@ -66,8 +68,8 @@ pub enum Compiler {
 impl Compiler {
     fn find() -> Option<Self> {
         std::env::set_var("OPT_LEVEL", "0");
-        // std::env::set_var("TARGET", env!("TARGET"));
-        //std::env::set_var("HOST", env!("HOST"));
+        std::env::set_var("TARGET", env!("TARGET"));
+        std::env::set_var("HOST", env!("HOST"));
 
         let tool = match cc::Build::new().cargo_metadata(false).try_get_compiler() {
             Ok(tool) => tool,
@@ -83,15 +85,26 @@ impl Compiler {
         }
     }
 
-    fn preprocess(&self, code: &[u8]) -> Result<Vec<u8>> {
+    fn preprocess(&self, source: &Path, dest: &Path) -> Result<()> {
         match self {
-            Self::GnuClang(path) => Self::gnu_clang(path, code),
-            Self::Msvc(path) => Self::msvc(path, code),
+            Self::GnuClang(path) => Self::gnu_clang(path, source, dest),
+            Self::Msvc(path) => Self::msvc(path, source, dest),
+        }
+    }
+
+    fn assemble_link(&self, source: &Path, dest: &Path) -> Result<()> {
+        match self {
+            Self::GnuClang(path) => Self::gnu_clang(path, source, dest),
+            Self::Msvc(path) => {
+                let mut path = path.clone();
+                path.set_file_name("ml64.exe");
+                Self::msvc_asm(&path, source, dest)
+            }
         }
     }
 
     // Arguments are the same for Clang and Gnu gcc
-    fn gnu_clang(path: &Path, code: &[u8]) -> Result<Vec<u8>> {
+    fn gnu_clang(path: &Path, source: &Path, dest: &Path) -> Result<()> {
         let mut process = Command::new(path)
             .args(&["-nostdinc", "-P", "-E", "-x", "c", "-"])
             .stdin(Stdio::piped())
@@ -99,66 +112,47 @@ impl Compiler {
             .stderr(Stdio::piped())
             .spawn()?;
 
-        process.stdin.as_mut().unwrap().write_all(code)?;
+        // process.stdin.as_mut().unwrap().write_all(code)?;
 
-        capture(process)
+        capture(process)?;
+        Ok(())
     }
 
-    fn msvc(path: &Path, code: &[u8]) -> Result<Vec<u8>> {
-        #[repr(transparent)]
-        struct TempFileHandle(PathBuf);
-        impl Drop for TempFileHandle {
-            fn drop(&mut self) {
-                let _ = std::fs::remove_file(&self.0);
-            }
-        }
-        impl AsRef<Path> for TempFileHandle {
-            #[inline]
-            fn as_ref(&self) -> &Path {
-                &self.0
-            }
-        }
-        impl AsRef<OsStr> for TempFileHandle {
-            #[inline]
-            fn as_ref(&self) -> &OsStr {
-                self.0.as_os_str()
-            }
-        }
-
-        let src_path =
-            TempFileHandle(std::env::temp_dir().join(format!("{}.c", uuid::Uuid::new_v4())));
-        std::fs::write(&src_path, code)?;
-        // std::fs::write("test.c", code)?;
+    fn msvc(path: &Path, source: &Path, dest: &Path) -> Result<()> {
         capture({
             Command::new(path)
-                .args(&["/EP"])
-                .arg(&src_path)
+                .args(&["/EP", "/P", format!("/Fi{}", dest.display()).as_str()])
+                .arg(source)
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .spawn()?
-        })
+        })?;
+        Ok(())
+    }
+
+    fn msvc_asm(path: &Path, source: &Path, dest: &Path) -> Result<()> {
+        capture({
+            Command::new(path)
+                .args(&[format!("/Fe{}", dest.display()).as_str()])
+                .arg(source)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()?
+        })?;
+        Ok(())
     }
 }
 
-pub fn preprocess(code: &[u8]) -> Option<Result<Vec<u8>>> {
-    COMPILER.as_ref().map(|compiler| compiler.preprocess(code))
+pub fn preprocess(source: &Path, dest: &Path) -> Result<()> {
+    let comp = COMPILER.as_ref().unwrap();
+    //  .as_ref()
+    comp.preprocess(source, dest)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+pub fn assemble_link(source: &Path, output: &Path) -> Result<()> {
+    let comp = COMPILER.as_ref().unwrap();
 
-    #[test]
-    fn it_works() {
-        let source = "#define FOO 42\nFOO";
-        let result = preprocess(source.as_bytes());
-        assert!(result.is_some());
-        let result = result.unwrap();
-        assert!(result.is_ok());
-        let result = result.unwrap();
-        let result = std::str::from_utf8(&result).unwrap().trim();
-
-        assert_eq!(result, "42");
-    }
+    comp.assemble_link(source, output)
 }

@@ -49,6 +49,7 @@ impl TackyProgram {
     }
 
     pub fn dump(&self) {
+        print!("Dumping TackyProgram\n");
         for function in &self.functions {
             println!("Function: {}", function.name);
             for instruction in &function.instructions {
