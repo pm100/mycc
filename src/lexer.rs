@@ -23,6 +23,9 @@ pub enum Token {
     Complement,
     Negate,
     Divide,
+    Add,
+    Multiply,
+    Remainder,
 
     // keywords
     Int,
@@ -88,6 +91,10 @@ impl Lexer {
 
                 '~' => Token::Complement,
                 '-' => Token::Negate,
+
+                '+' => Token::Add,
+                '*' => Token::Multiply,
+                '%' => Token::Remainder,
 
                 _ => {
                     if char.is_ascii_digit() {

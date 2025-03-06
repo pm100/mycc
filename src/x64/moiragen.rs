@@ -1,8 +1,7 @@
-
 use crate::{codegen::MoiraGenerator, moira::MoiraProgram, tacky::TackyProgram};
 use anyhow::Result;
 
-use super::moira_inst::{Instruction, Operand, Register, UnaryOperator};
+use super::moira_inst::{BinaryOperator, Instruction, Operand, Register, UnaryOperator};
 pub struct X64MoiraGenerator {
     moira: MoiraProgram<Instruction>,
 }
@@ -48,6 +47,46 @@ impl X64MoiraGenerator {
                     crate::tacky::UnaryOperator::Complement => UnaryOperator::Not,
                 };
                 self.moira.add_instruction(Instruction::Unary(op, value1));
+            }
+            crate::tacky::Instruction::Binary(binary_operator, src1, src2, dest) => {
+                let src1 = self.get_value(src1);
+                let src2 = self.get_value(src2);
+                let dest = self.get_value(dest);
+
+                let op = match binary_operator {
+                    crate::tacky::BinaryOperator::Add => Some(BinaryOperator::Add),
+                    crate::tacky::BinaryOperator::Subtract => Some(BinaryOperator::Sub),
+                    crate::tacky::BinaryOperator::Multiply => Some(BinaryOperator::Mult),
+                    _ => None,
+                };
+                //     crate::tacky::BinaryOperator::Divide => crate::moira::BinaryOperator::Div,
+                //     crate::tacky::BinaryOperator::Remainder => crate::moira::BinaryOperator::Mod,
+                // };
+                if let Some(op) = op {
+                    self.moira
+                        .add_instruction(Instruction::Mov(src1, dest.clone()));
+                    self.moira
+                        .add_instruction(Instruction::Binary(op, src2, dest));
+                } else {
+                    self.moira
+                        .add_instruction(Instruction::Mov(src1, Operand::Register(Register::AX)));
+                    self.moira.add_instruction(Instruction::Cdq);
+                    self.moira.add_instruction(Instruction::Idiv(src2));
+
+                    match binary_operator {
+                        crate::tacky::BinaryOperator::Divide => {
+                            let instruction =
+                                Instruction::Mov(Operand::Register(Register::AX), dest);
+                            self.moira.add_instruction(instruction);
+                        }
+                        crate::tacky::BinaryOperator::Remainder => {
+                            let instruction =
+                                Instruction::Mov(Operand::Register(Register::DX), dest);
+                            self.moira.add_instruction(instruction);
+                        }
+                        _ => panic!("Unsupported binary operator"),
+                    }
+                }
             }
         }
         Ok(())

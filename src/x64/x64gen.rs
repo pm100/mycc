@@ -6,13 +6,14 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::{io::BufWriter, path::Path};
 
-use super::moira_inst::{Instruction, Operand, Register, UnaryOperator};
+use super::moira_inst::{BinaryOperator, Instruction, Operand, Register, UnaryOperator};
 pub struct X64CodeGenerator {
     pseudo_registers: HashMap<String, i32>,
     next_offset: i32,
 }
 
-const SCRATCH_REGISTER: Register = Register::R10;
+const SCRATCH_REGISTER1: Register = Register::R10;
+const SCRATCH_REGISTER2: Register = Register::R11;
 
 impl MoiraCompiler for X64CodeGenerator {
     type InstructionType = Instruction;
@@ -106,6 +107,23 @@ impl X64CodeGenerator {
                 let op = self.get_operand(operand)?;
                 writeln!(writer, "        {} {}", oper, op)?;
             }
+            Instruction::Binary(operator, left, right) => {
+                let op = match operator {
+                    BinaryOperator::Add => "add",
+                    BinaryOperator::Sub => "sub",
+                    BinaryOperator::Mult => "imul",
+                };
+                let left = self.get_operand(left)?;
+                let right = self.get_operand(right)?;
+                writeln!(writer, "        {} {}, {}", op, right, left)?;
+            }
+            Instruction::Idiv(divisor) => {
+                let op = self.get_operand(divisor)?;
+                writeln!(writer, "        idiv {}", op)?;
+            }
+            Instruction::Cdq => {
+                writeln!(writer, "        cdq")?;
+            }
             _ => bail!("Unsupported instruction"),
         }
         Ok(())
@@ -117,6 +135,8 @@ impl X64CodeGenerator {
             Operand::Register(register) => Ok(match register {
                 Register::AX => "eax".to_string(),
                 Register::R10 => "r10d".to_string(),
+                Register::DX => "edx".to_string(),
+                Register::R11 => "r11d".to_string(),
             }),
             Operand::Stack(offset) => Ok(format!("DWORD PTR[rbp-{}]", offset)),
         }
@@ -126,7 +146,7 @@ impl X64CodeGenerator {
         self.pseudo_registers.clear();
         let mut new_instructions = Vec::new();
         for instruction in function.instructions.iter() {
-            let new_ins = match instruction {
+            match instruction {
                 Instruction::AllocateStack(_) => {
                     todo!();
                 }
@@ -134,28 +154,75 @@ impl X64CodeGenerator {
                     let new_src = self.fix_pseudo(src)?;
                     let new_dest = self.fix_pseudo(dest)?;
                     if Self::is_stack(&new_src) && Self::is_stack(&new_dest) {
-                        let scratch = Operand::Register(SCRATCH_REGISTER);
-                        let load = Instruction::Mov(new_src, scratch.clone());
-                        let store = Instruction::Mov(scratch, new_dest);
-                        (load, Some(store))
+                        let scratch = Operand::Register(SCRATCH_REGISTER1);
+                        new_instructions.push(Instruction::Mov(new_src, scratch.clone()));
+                        new_instructions.push(Instruction::Mov(scratch, new_dest));
                     } else {
-                        (Instruction::Mov(new_src, new_dest), None)
+                        new_instructions.push(Instruction::Mov(new_src, new_dest));
                     }
                 }
-                Instruction::Unary(op, dest) => {
-                    (Instruction::Unary(op.clone(), self.fix_pseudo(dest)?), None)
+                Instruction::Binary(op, src, dest) => {
+                    let new_src = self.fix_pseudo(src)?;
+                    let new_dest = self.fix_pseudo(dest)?;
+
+                    match op {
+                        BinaryOperator::Add | BinaryOperator::Sub => {
+                            if Self::is_stack(&new_src) && Self::is_stack(&new_dest) {
+                                let scratch = Operand::Register(SCRATCH_REGISTER1);
+                                new_instructions.push(Instruction::Mov(new_src, scratch.clone()));
+                                new_instructions.push(Instruction::Binary(
+                                    op.clone(),
+                                    scratch,
+                                    new_dest,
+                                ));
+                            } else {
+                                new_instructions.push(Instruction::Binary(
+                                    op.clone(),
+                                    new_src,
+                                    new_dest,
+                                ));
+                            }
+                        }
+                        BinaryOperator::Mult => {
+                            if Self::is_stack(&new_dest) {
+                                let scratch = Operand::Register(SCRATCH_REGISTER2);
+                                new_instructions.push(Instruction::Mov(new_src, scratch.clone()));
+                                new_instructions.push(Instruction::Binary(
+                                    op.clone(),
+                                    new_dest.clone(),
+                                    scratch.clone(),
+                                ));
+                                new_instructions.push(Instruction::Mov(scratch, new_dest));
+                            } else {
+                                new_instructions.push(Instruction::Mov(new_src, new_dest));
+                            }
+                        }
+                    }
                 }
 
-                _ => (instruction.clone(), None),
+                Instruction::Unary(op, dest) => {
+                    new_instructions.push(Instruction::Unary(op.clone(), self.fix_pseudo(dest)?));
+                }
+                Instruction::Idiv(operand) => {
+                    if let Operand::Immediate(imm) = operand {
+                        new_instructions.push(Instruction::Mov(
+                            Operand::Immediate(*imm),
+                            Operand::Register(SCRATCH_REGISTER1),
+                        ));
+                        new_instructions
+                            .push(Instruction::Idiv(Operand::Register(SCRATCH_REGISTER1)));
+                    } else {
+                        new_instructions.push(Instruction::Idiv(self.fix_pseudo(operand)?));
+                    }
+                }
+                _ => {
+                    new_instructions.push(instruction.clone());
+                }
             };
-            println!("new_ins: {:?}", new_ins.0);
-            new_instructions.push(new_ins.0);
-            if let Some(ins) = new_ins.1 {
-                println!("new_ins: {:?}", ins);
-                new_instructions.push(ins);
-            }
         }
-
+        for instr in new_instructions.iter() {
+            println!("{:?}", instr);
+        }
         Ok(new_instructions)
     }
     fn is_stack(operand: &Operand) -> bool {

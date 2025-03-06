@@ -14,7 +14,7 @@ macro_rules! expect {
 
 use crate::{
     lexer::{Lexer, Token},
-    tacky::{Instruction, TackyProgram, UnaryOperator, Value},
+    tacky::{BinaryOperator, Instruction, TackyProgram, UnaryOperator, Value},
 };
 
 pub struct Parser {
@@ -83,31 +83,41 @@ impl Parser {
     }
 
     fn do_return(&mut self) -> Result<()> {
-        let val = self.do_expression()?;
+        let val = self.do_expression(0)?;
         self.tacky.add_instruction(Instruction::Return(val));
         Ok(())
     }
-    fn next_token(&mut self) -> Result<Token> {
-        if let Some(peeked) = self.peeked_token.take() {
-            return Ok(peeked);
+
+    fn do_expression(&mut self, min_prec: i32) -> Result<Value> {
+        let mut left = self.do_factor()?;
+        let mut token = self.peek()?;
+        loop {
+            if Self::precedence(&token) < min_prec {
+                break;
+            }
+            let op = self.do_binop()?;
+            let right = self.do_expression(Self::precedence(&token) + 1)?;
+            let dest = Value::Variable(self.make_temporary());
+            let inst = Instruction::Binary(op, left, right, dest.clone());
+            self.tacky.add_instruction(inst);
+            left = dest;
+            token = self.peek()?;
         }
-        let token = self.lexer.next_token()?;
-        if token == Token::Eof {
-            self.eof_hit = true;
-        }
-        Ok(token)
+        Ok(left)
     }
 
-    fn peek(&mut self) -> Result<Token> {
-        if let Some(peeked) = self.peeked_token.as_ref() {
-            Ok(peeked.clone())
-        } else {
-            let next = self.next_token()?;
-            self.peeked_token = Some(next.clone());
-            Ok(next)
+    fn do_binop(&mut self) -> Result<BinaryOperator> {
+        let token = self.next_token()?;
+        match token {
+            Token::Add => Ok(BinaryOperator::Add),
+            Token::Negate => Ok(BinaryOperator::Subtract),
+            Token::Multiply => Ok(BinaryOperator::Multiply),
+            Token::Divide => Ok(BinaryOperator::Divide),
+            Token::Remainder => Ok(BinaryOperator::Remainder),
+            _ => bail!("Expected binop, got {:?}", token),
         }
     }
-    fn do_expression(&mut self) -> Result<Value> {
+    fn do_factor(&mut self) -> Result<Value> {
         let token = self.next_token()?;
         match token {
             Token::Constant(val) => {
@@ -116,7 +126,7 @@ impl Parser {
             }
 
             Token::Negate => {
-                let source = self.do_expression()?;
+                let source = self.do_factor()?;
                 let dest_name = self.make_temporary();
                 let ret_dest = Value::Variable(dest_name.clone());
                 let unop =
@@ -126,7 +136,7 @@ impl Parser {
             }
 
             Token::Complement => {
-                let source = self.do_expression()?;
+                let source = self.do_factor()?;
                 let dest_name = self.make_temporary();
                 let ret_dest = Value::Variable(dest_name.clone());
                 let unop = Instruction::Unary(
@@ -138,10 +148,7 @@ impl Parser {
                 Ok(ret_dest)
             }
             Token::LeftParen => {
-                //   let mut pair_iter = pair.into_inner();
-                // first is name
-                //let pair = pair_iter.next().unwrap()
-                let ret = self.do_expression()?;
+                let ret = self.do_expression(0)?;
                 self.expect(Token::RightParen)?;
                 Ok(ret)
             }
@@ -164,5 +171,37 @@ impl Parser {
         let temp = format!("temp.{}", self.next_temporary);
         self.next_temporary += 1;
         temp
+    }
+
+    fn next_token(&mut self) -> Result<Token> {
+        if let Some(peeked) = self.peeked_token.take() {
+            return Ok(peeked);
+        }
+        let token = self.lexer.next_token()?;
+        if token == Token::Eof {
+            self.eof_hit = true;
+        }
+        Ok(token)
+    }
+
+    fn peek(&mut self) -> Result<Token> {
+        if let Some(peeked) = self.peeked_token.as_ref() {
+            Ok(peeked.clone())
+        } else {
+            let next = self.next_token()?;
+            self.peeked_token = Some(next.clone());
+            Ok(next)
+        }
+    }
+
+    fn precedence(token: &Token) -> i32 {
+        match token {
+            Token::Negate => 45,
+            Token::Add => 45,
+            Token::Multiply => 50,
+            Token::Divide => 50,
+            Token::Remainder => 50,
+            _ => -1, // indicates this is not a binop
+        }
     }
 }

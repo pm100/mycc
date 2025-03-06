@@ -138,7 +138,7 @@ fn build(source: &Path, output: &Path) -> Result<()> {
 
             let stub = "mycc_cpp";
             let gen_output = std::env::temp_dir().join(format!("{}.s", stub));
-            let gen_output = PathBuf::from(format!("{}.s", stub));
+            let gen_output = PathBuf::from(format!("{}.asm", stub));
             let mut gen = X64CodeGenerator::new();
             gen.generate_asm(moira, &gen_output)?;
             crate::cpp::assemble_link(&gen_output, output)?;

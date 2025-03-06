@@ -6,6 +6,7 @@ pub struct TackyProgram {
 pub enum Instruction {
     Return(Value),
     Unary(UnaryOperator, Value, Value),
+    Binary(BinaryOperator, Value, Value, Value),
 }
 #[derive(Debug)]
 
@@ -14,6 +15,14 @@ pub enum UnaryOperator {
     Complement,
 }
 #[derive(Debug)]
+pub enum BinaryOperator {
+    Add,
+    Subtract,
+    Multiply,
+    Divide,
+    Remainder,
+}
+#[derive(Debug, Clone)]
 
 pub enum Value {
     Int(i32),
@@ -65,6 +74,9 @@ impl TackyProgram {
                     }
                     Instruction::Unary(op, src, dest) => {
                         println!("  Unary {:?} {:?} {:?}", op, src, dest);
+                    }
+                    Instruction::Binary(op, src1, src2, dest) => {
+                        println!("  Binary {:?} {:?} {:?} {:?}", op, src1, src2, dest);
                     }
                 }
             }
