@@ -1,15 +1,20 @@
 pub mod codegen;
 pub mod cpp;
 pub mod lexer;
+pub mod moira;
 pub mod parser;
 pub mod tacky;
 pub mod x64 {
+    pub mod moira_inst;
+    pub mod moiragen;
     pub mod x64gen;
 }
 //use crate::x64::x64gen::X64CodeGenerator;
-use crate::codegen::CodeGenerator;
+use crate::codegen::MoiraGenerator;
 use crate::x64::x64gen::X64CodeGenerator;
 use anyhow::Result;
+use codegen::MoiraCompiler;
+use x64::moiragen::X64MoiraGenerator;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -36,17 +41,7 @@ fn main() -> ExitCode {
     println!("parse: {:?}", cli.parse);
     println!("codegen: {:?}", cli.codegen);
     println!("source: {:?}", &cli.source);
-    // if !cli.lex && !cli.parse && !cli.codegen {
-    //     cli.codegen = true;
-    //     //return ExitCode::FAILURE;
-    // }
-    // let mut lexer = lexer::Lexer::new(cli.source);
-    // while let Some(token) = lexer.next_token() {
-    //     println!("{:?}", token);
-    // }
 
-    // let mut parser = parser::Parser::new(&cli.source);
-    // parser.parse();
     let stub = "mycc_cpp";
     //uuid::Uuid::new_v4()
     let preproc_output = std::env::temp_dir().join(format!("{}.i", stub));
@@ -83,7 +78,7 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     }
-    return ExitCode::FAILURE;
+    ExitCode::FAILURE
 }
 
 fn lex(path: &Path) -> Result<bool> {
@@ -109,11 +104,17 @@ fn codegen(path: &Path) -> Result<()> {
     let tackyx = parser.parse();
     match tackyx {
         Ok(tacky) => {
-            let stub = "mycc_cpp";
-            let gen_output = std::env::temp_dir().join(format!("{}.s", stub));
+            let mut gen = X64MoiraGenerator::new();
+            let moira_ast = gen.generate_moira(tacky)?;
+            moira_ast.dump();
+            // let asm_ast = moira::AsmGenerator::new().generate(&tacky);
+            // asm_ast.dump();
 
-            let mut gen = X64CodeGenerator::new();
-            gen.generate(&tacky, &gen_output)?;
+            // let stub = "mycc_cpp";
+            // let gen_output = std::env::temp_dir().join(format!("{}.s", stub));
+
+            // let mut gen = X64CodeGenerator::new();
+            //    gen.generate(&tacky, &gen_output)?;
         }
         Err(e) => {
             println!("Error: {:?}", e);
@@ -129,12 +130,18 @@ fn build(source: &Path, output: &Path) -> Result<()> {
     let tackyx = parser.parse();
     match tackyx {
         Ok(tacky) => {
+            tacky.dump();
+            let mut gen = X64MoiraGenerator::new();
+            // let mut moira = MoiraProgram::<Instruction>::new();
+            let moira = gen.generate_moira(tacky)?;
+            moira.dump();
+
             let stub = "mycc_cpp";
             let gen_output = std::env::temp_dir().join(format!("{}.s", stub));
-
+            let gen_output = PathBuf::from(format!("{}.s", stub));
             let mut gen = X64CodeGenerator::new();
-            gen.generate(&tacky, &gen_output)?;
-            gen.build(&gen_output, output)?;
+            gen.generate_asm(moira, &gen_output)?;
+            crate::cpp::assemble_link(&gen_output, output)?;
         }
         Err(e) => {
             println!("Error: {:?}", e);

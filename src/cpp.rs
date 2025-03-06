@@ -1,6 +1,4 @@
 use std::{
-    ffi::OsStr,
-    io::Write,
     path::{Path, PathBuf},
     process::{Command, Stdio},
 };
@@ -105,8 +103,8 @@ impl Compiler {
 
     // Arguments are the same for Clang and Gnu gcc
     fn gnu_clang(path: &Path, source: &Path, dest: &Path) -> Result<()> {
-        let mut process = Command::new(path)
-            .args(&["-nostdinc", "-P", "-E", "-x", "c", "-"])
+        let process = Command::new(path)
+            .args(["-nostdinc", "-P", "-E", "-x", "c", "-"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -121,7 +119,7 @@ impl Compiler {
     fn msvc(path: &Path, source: &Path, dest: &Path) -> Result<()> {
         capture({
             Command::new(path)
-                .args(&["/EP", "/P", format!("/Fi{}", dest.display()).as_str()])
+                .args(["/EP", "/P", format!("/Fi{}", dest.display()).as_str()])
                 .arg(source)
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
@@ -134,7 +132,7 @@ impl Compiler {
     fn msvc_asm(path: &Path, source: &Path, dest: &Path) -> Result<()> {
         capture({
             Command::new(path)
-                .args(&[format!("/Fe{}", dest.display()).as_str()])
+                .args([format!("/Fe{}", dest.display()).as_str()])
                 .arg(source)
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())

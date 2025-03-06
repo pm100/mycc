@@ -90,7 +90,7 @@ impl Lexer {
                 '-' => Token::Negate,
 
                 _ => {
-                    if char.is_digit(10) {
+                    if char.is_ascii_digit() {
                         let t = self.number();
                         // reject 123foo
                         if self.peek().is_alphabetic() {
@@ -127,7 +127,7 @@ impl Lexer {
     }
     fn number(&mut self) -> Token {
         let start = self.current_pos - 1;
-        while self.peek().is_digit(10) {
+        while self.peek().is_ascii_digit() {
             self.advance();
         }
         Token::Constant(self.current_line[start..self.current_pos].parse().unwrap())
@@ -172,7 +172,7 @@ use core::panic;
 use std::{
     fs::File,
     io::{self, prelude::*},
-    path::{Path, PathBuf},
+    path::Path,
 };
 
 struct LineReader {

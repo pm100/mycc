@@ -26,6 +26,12 @@ pub struct Function {
     pub instructions: Vec<Instruction>,
 }
 
+impl Default for TackyProgram {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TackyProgram {
     pub fn new() -> Self {
         TackyProgram {
@@ -49,7 +55,7 @@ impl TackyProgram {
     }
 
     pub fn dump(&self) {
-        print!("Dumping TackyProgram\n");
+        println!("Dumping TackyProgram");
         for function in &self.functions {
             println!("Function: {}", function.name);
             for instruction in &function.instructions {

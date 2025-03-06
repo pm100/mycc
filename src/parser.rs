@@ -100,11 +100,11 @@ impl Parser {
 
     fn peek(&mut self) -> Result<Token> {
         if let Some(peeked) = self.peeked_token.as_ref() {
-            return Ok(peeked.clone());
+            Ok(peeked.clone())
         } else {
             let next = self.next_token()?;
             self.peeked_token = Some(next.clone());
-            return Ok(next);
+            Ok(next)
         }
     }
     fn do_expression(&mut self) -> Result<Value> {
@@ -156,7 +156,7 @@ impl Parser {
         if discriminant(&nt) != discriminant(&token) {
             bail!("Expected {:?}, got {:?}", token, nt);
         } else {
-            return Ok(nt);
+            Ok(nt)
         }
     }
 
