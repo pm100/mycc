@@ -114,6 +114,14 @@ impl Parser {
             Token::Multiply => Ok(BinaryOperator::Multiply),
             Token::Divide => Ok(BinaryOperator::Divide),
             Token::Remainder => Ok(BinaryOperator::Remainder),
+            Token::BitwiseAnd => Ok(BinaryOperator::BitAnd),
+            Token::BitwiseOr => Ok(BinaryOperator::BitOr),
+            Token::BitwiseXor => Ok(BinaryOperator::BitXor),
+            Token::ShiftLeft => Ok(BinaryOperator::ShiftLeft),
+            Token::ShiftRight => Ok(BinaryOperator::ShiftRight),
+            Token::LogicalAnd => Ok(BinaryOperator::LogicalAnd),
+            Token::LogicalOr => Ok(BinaryOperator::LogicalOr),
+            Token::IsEqual => Ok(BinaryOperator::Equal),
             _ => bail!("Expected binop, got {:?}", token),
         }
     }
@@ -196,11 +204,30 @@ impl Parser {
 
     fn precedence(token: &Token) -> i32 {
         match token {
-            Token::Negate => 45,
-            Token::Add => 45,
             Token::Multiply => 50,
             Token::Divide => 50,
             Token::Remainder => 50,
+
+            Token::Negate => 45,
+            Token::Add => 45,
+
+            Token::ShiftLeft => 40,
+            Token::ShiftRight => 40,
+
+            Token::LessThan => 35,
+            Token::LessThanOrEqual => 35,
+            Token::GreaterThan => 35,
+            Token::GreaterThanOrEqual => 35,
+
+            Token::IsEqual => 30,
+            Token::IsNotEqual => 30,
+
+            Token::BitwiseAnd => 25,
+            Token::BitwiseXor => 24,
+            Token::BitwiseOr => 23,
+            Token::LogicalAnd => 22,
+            Token::LogicalOr => 21,
+
             _ => -1, // indicates this is not a binop
         }
     }

@@ -74,7 +74,7 @@ fn main() -> ExitCode {
             return ExitCode::SUCCESS;
         }
         Err(e) => {
-            println!("build error {:?}", e);
+            eprintln!("build error {:?}", e);
             return ExitCode::FAILURE;
         }
     }

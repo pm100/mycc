@@ -49,6 +49,12 @@ fn capture(process: std::process::Child) -> Result<Vec<u8>> {
     let output = process.wait_with_output()?;
     // return Err(anyhow!(CppError::String("foo".to_string())));
     if !output.status.success() {
+        eprintln!(
+            "Error code: {}\n\n{}{}",
+            output.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&output.stderr),
+            String::from_utf8_lossy(&output.stdout)
+        );
         return Err(anyhow!(format!(
             "Error code: {}\n\n{}",
             output.status.code().unwrap_or(-1),

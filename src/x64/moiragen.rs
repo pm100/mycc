@@ -11,7 +11,7 @@ impl Default for X64MoiraGenerator {
         Self::new()
     }
 }
-
+use crate::tacky;
 impl X64MoiraGenerator {
     pub fn new() -> Self {
         Self {
@@ -26,7 +26,7 @@ impl X64MoiraGenerator {
     }
     fn gen_instruction(&mut self, instruction: &crate::tacky::Instruction) -> Result<()> {
         match instruction {
-            crate::tacky::Instruction::Return(value) => {
+            tacky::Instruction::Return(value) => {
                 let value = self.get_value(value);
 
                 let minst = Instruction::Mov(value, Operand::Register(Register::AX));
@@ -35,7 +35,7 @@ impl X64MoiraGenerator {
                 let instruction = Instruction::Ret;
                 self.moira.add_instruction(instruction);
             }
-            crate::tacky::Instruction::Unary(unary_operator, value, value1) => {
+            tacky::Instruction::Unary(unary_operator, value, value1) => {
                 let value = self.get_value(value);
                 let value1 = self.get_value(value1);
 
@@ -48,43 +48,95 @@ impl X64MoiraGenerator {
                 };
                 self.moira.add_instruction(Instruction::Unary(op, value1));
             }
-            crate::tacky::Instruction::Binary(binary_operator, src1, src2, dest) => {
+            tacky::Instruction::Binary(binary_operator, src1, src2, dest) => {
                 let src1 = self.get_value(src1);
                 let src2 = self.get_value(src2);
                 let dest = self.get_value(dest);
 
                 let op = match binary_operator {
-                    crate::tacky::BinaryOperator::Add => Some(BinaryOperator::Add),
-                    crate::tacky::BinaryOperator::Subtract => Some(BinaryOperator::Sub),
-                    crate::tacky::BinaryOperator::Multiply => Some(BinaryOperator::Mult),
+                    tacky::BinaryOperator::Add => Some(BinaryOperator::Add),
+                    tacky::BinaryOperator::Subtract => Some(BinaryOperator::Sub),
+                    tacky::BinaryOperator::Multiply => Some(BinaryOperator::Mult),
+                    tacky::BinaryOperator::BitAnd => Some(BinaryOperator::BitAnd),
+                    tacky::BinaryOperator::BitOr => Some(BinaryOperator::BitOr),
+                    tacky::BinaryOperator::BitXor => Some(BinaryOperator::BitXor),
+                    tacky::BinaryOperator::ShiftLeft => Some(BinaryOperator::ShiftLeft),
+                    tacky::BinaryOperator::ShiftRight => Some(BinaryOperator::ShiftRight),
                     _ => None,
                 };
-                //     crate::tacky::BinaryOperator::Divide => crate::moira::BinaryOperator::Div,
-                //     crate::tacky::BinaryOperator::Remainder => crate::moira::BinaryOperator::Mod,
-                // };
+
                 if let Some(op) = op {
                     self.moira
                         .add_instruction(Instruction::Mov(src1, dest.clone()));
                     self.moira
                         .add_instruction(Instruction::Binary(op, src2, dest));
                 } else {
-                    self.moira
-                        .add_instruction(Instruction::Mov(src1, Operand::Register(Register::AX)));
-                    self.moira.add_instruction(Instruction::Cdq);
-                    self.moira.add_instruction(Instruction::Idiv(src2));
-
                     match binary_operator {
-                        crate::tacky::BinaryOperator::Divide => {
-                            let instruction =
-                                Instruction::Mov(Operand::Register(Register::AX), dest);
-                            self.moira.add_instruction(instruction);
+                        // tacky::BinaryOperator::ShiftLeft => {
+                        //     self.moira.add_instruction(Instruction::Mov(
+                        //         src1,
+                        //         Operand::Register(Register::AX),
+                        //     ));
+                        //     self.moira.add_instruction(Instruction::Mov(
+                        //         src2,
+                        //         Operand::Register(Register::CL),
+                        //     ));
+                        //     self.moira.add_instruction(Instruction::Binary(
+                        //         BinaryOperator::ShiftLeft,
+                        //         Operand::Register(Register::CL),
+                        //         Operand::Register(Register::AX),
+                        //     ));
+                        //     self.moira.add_instruction(Instruction::Mov(
+                        //         Operand::Register(Register::AX),
+                        //         dest,
+                        //     ));
+                        // }
+                        // tacky::BinaryOperator::ShiftRight => {
+                        //     self.moira.add_instruction(Instruction::Mov(
+                        //         src1,
+                        //         Operand::Register(Register::AX),
+                        //     ));
+                        //     self.moira.add_instruction(Instruction::Mov(
+                        //         src2,
+                        //         Operand::Register(Register::CL),
+                        //     ));
+                        //     self.moira.add_instruction(Instruction::Binary(
+                        //         BinaryOperator::ShiftRight,
+                        //         Operand::Register(Register::CL),
+                        //         Operand::Register(Register::AX),
+                        //     ));
+                        //     self.moira.add_instruction(Instruction::Mov(
+                        //         Operand::Register(Register::AX),
+                        //         dest,
+                        //     ));
+                        // }
+                        //  _ => {}
+                        tacky::BinaryOperator::Divide | tacky::BinaryOperator::Remainder => {
+                            self.moira.add_instruction(Instruction::Mov(
+                                src1,
+                                Operand::Register(Register::AX),
+                            ));
+                            self.moira.add_instruction(Instruction::Cdq);
+                            self.moira.add_instruction(Instruction::Idiv(src2));
+
+                            match binary_operator {
+                                tacky::BinaryOperator::Divide => {
+                                    let instruction =
+                                        Instruction::Mov(Operand::Register(Register::AX), dest);
+                                    self.moira.add_instruction(instruction);
+                                }
+                                tacky::BinaryOperator::Remainder => {
+                                    let instruction =
+                                        Instruction::Mov(Operand::Register(Register::DX), dest);
+                                    self.moira.add_instruction(instruction);
+                                }
+
+                                _ => panic!("Unsupported binary operator"),
+                            }
                         }
-                        crate::tacky::BinaryOperator::Remainder => {
-                            let instruction =
-                                Instruction::Mov(Operand::Register(Register::DX), dest);
-                            self.moira.add_instruction(instruction);
+                        _ => {
+                            panic!("Unsupported binary operator");
                         }
-                        _ => panic!("Unsupported binary operator"),
                     }
                 }
             }
@@ -94,8 +146,8 @@ impl X64MoiraGenerator {
 
     fn get_value(&self, value: &crate::tacky::Value) -> Operand {
         match value {
-            crate::tacky::Value::Int(value) => Operand::Immediate(*value),
-            crate::tacky::Value::Variable(register) => Operand::Pseudo(register.clone()),
+            tacky::Value::Int(value) => Operand::Immediate(*value),
+            tacky::Value::Variable(register) => Operand::Pseudo(register.clone()),
         }
     }
 }

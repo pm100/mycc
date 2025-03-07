@@ -95,9 +95,13 @@ impl X64CodeGenerator {
                 writeln!(writer, "        ret")?;
             }
             Instruction::Mov(src, dest) => {
-                let opsrc = self.get_operand(src)?;
-                let opdest = self.get_operand(dest)?;
-                writeln!(writer, "        mov {}, {}", opdest, opsrc)?;
+                let mut src_str = self.get_operand(src)?;
+                let dest_str = self.get_operand(dest)?;
+                println!("{:?} {:?} ", src_str, dest_str);
+                if dest_str == "cl" && Self::is_stack(src) {
+                    src_str = src_str.replace("DWORD", "BYTE");
+                }
+                writeln!(writer, "        mov {}, {}", dest_str, src_str)?;
             }
             Instruction::Unary(operator, operand) => {
                 let oper = match operator {
@@ -112,10 +116,15 @@ impl X64CodeGenerator {
                     BinaryOperator::Add => "add",
                     BinaryOperator::Sub => "sub",
                     BinaryOperator::Mult => "imul",
+                    BinaryOperator::BitAnd => "and",
+                    BinaryOperator::BitOr => "or",
+                    BinaryOperator::BitXor => "xor",
+                    BinaryOperator::ShiftLeft => "sal",
+                    BinaryOperator::ShiftRight => "sar",
                 };
-                let left = self.get_operand(left)?;
-                let right = self.get_operand(right)?;
-                writeln!(writer, "        {} {}, {}", op, right, left)?;
+                let left_str = self.get_operand(left)?;
+                let right_str = self.get_operand(right)?;
+                writeln!(writer, "        {} {}, {}", op, right_str, left_str)?;
             }
             Instruction::Idiv(divisor) => {
                 let op = self.get_operand(divisor)?;
@@ -129,17 +138,28 @@ impl X64CodeGenerator {
         Ok(())
     }
     fn get_operand(&mut self, value: &Operand) -> Result<String> {
-        match value {
-            Operand::Immediate(value) => Ok(value.to_string()),
+        let val_str = match value {
+            Operand::Immediate(value) => value.to_string(),
             Operand::Pseudo(_) => panic!("Pseudo register not supported"),
-            Operand::Register(register) => Ok(match register {
+            Operand::Register(register) => match register {
                 Register::AX => "eax".to_string(),
                 Register::R10 => "r10d".to_string(),
                 Register::DX => "edx".to_string(),
                 Register::R11 => "r11d".to_string(),
-            }),
-            Operand::Stack(offset) => Ok(format!("DWORD PTR[rbp-{}]", offset)),
-        }
+                Register::CL => "cl".to_string(),
+            },
+            Operand::Stack(offset) => {
+                let opsize = 4;
+                let qual = match opsize {
+                    1 => "BYTE",
+                    2 => "WORD",
+                    4 => "DWORD",
+                    _ => "QWORD",
+                };
+                format!("{} PTR[rbp-{}]", qual, offset)
+            }
+        };
+        Ok(val_str)
     }
     fn fixup_pass(&mut self, function: &Function<Instruction>) -> Result<Vec<Instruction>> {
         self.next_offset = 0;
@@ -166,7 +186,11 @@ impl X64CodeGenerator {
                     let new_dest = self.fix_pseudo(dest)?;
 
                     match op {
-                        BinaryOperator::Add | BinaryOperator::Sub => {
+                        BinaryOperator::Add
+                        | BinaryOperator::Sub
+                        | BinaryOperator::BitAnd
+                        | BinaryOperator::BitOr
+                        | BinaryOperator::BitXor => {
                             if Self::is_stack(&new_src) && Self::is_stack(&new_dest) {
                                 let scratch = Operand::Register(SCRATCH_REGISTER1);
                                 new_instructions.push(Instruction::Mov(new_src, scratch.clone()));
@@ -197,6 +221,23 @@ impl X64CodeGenerator {
                                 new_instructions.push(Instruction::Mov(new_src, new_dest));
                             }
                         }
+                        BinaryOperator::ShiftLeft | BinaryOperator::ShiftRight => {
+                            if Self::is_stack(&new_dest) {
+                                let scratch = Operand::Register(Register::CL);
+                                new_instructions.push(Instruction::Mov(new_src, scratch.clone()));
+                                new_instructions.push(Instruction::Binary(
+                                    op.clone(),
+                                    scratch,
+                                    new_dest,
+                                ));
+                            } else {
+                                new_instructions.push(Instruction::Binary(
+                                    op.clone(),
+                                    new_src,
+                                    new_dest,
+                                ));
+                            }
+                        } // _ => todo!(),
                     }
                 }
 
@@ -227,6 +268,16 @@ impl X64CodeGenerator {
     }
     fn is_stack(operand: &Operand) -> bool {
         matches!(operand, Operand::Stack(_))
+    }
+
+    fn get_operand_size(&self, operand: &Operand) -> i32 {
+        match operand {
+            Operand::Immediate(_) => 4,
+            Operand::Register(Register::CL) => 1,
+            Operand::Register(_) => 4,
+            Operand::Pseudo(_) => 4,
+            Operand::Stack(_) => 4,
+        }
     }
     fn fix_pseudo(&mut self, operand: &Operand) -> Result<Operand> {
         if let Operand::Pseudo(pseudo_name) = operand {

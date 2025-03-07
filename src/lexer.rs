@@ -20,12 +20,28 @@ pub enum Token {
     Constant(i32),
 
     // operators
-    Complement,
-    Negate,
+    Complement, // ~
+    Negate,     // -
     Divide,
     Add,
     Multiply,
-    Remainder,
+    Remainder, // %
+    Not,       // !
+
+    LogicalAnd,
+    LogicalOr,
+    IsEqual,
+    IsNotEqual,
+    LessThan,
+    LessThanOrEqual,
+    GreaterThan,
+    GreaterThanOrEqual,
+
+    BitwiseAnd,
+    BitwiseOr,
+    BitwiseXor,
+    ShiftLeft,
+    ShiftRight,
 
     // keywords
     Int,
@@ -87,6 +103,59 @@ impl Lexer {
                     }
                     Token::Divide
                 }
+
+                '&' => {
+                    if self.match_next('&') {
+                        Token::LogicalAnd
+                    } else {
+                        Token::BitwiseAnd
+                    }
+                }
+
+                '|' => {
+                    if self.match_next('|') {
+                        Token::LogicalOr
+                    } else {
+                        Token::BitwiseOr
+                    }
+                }
+
+                '^' => Token::BitwiseXor,
+                '<' => {
+                    if self.match_next('=') {
+                        Token::LessThanOrEqual
+                    } else if self.match_next('<') {
+                        Token::ShiftLeft
+                    } else {
+                        Token::LessThan
+                    }
+                }
+                '>' => {
+                    if self.match_next('=') {
+                        Token::GreaterThanOrEqual
+                    } else if self.match_next('>') {
+                        Token::ShiftRight
+                    } else {
+                        Token::GreaterThan
+                    }
+                }
+                '!' => {
+                    if self.match_next('=') {
+                        Token::IsNotEqual
+                    } else {
+                        Token::Not
+                    }
+                }
+
+                '=' => {
+                    if self.match_next('=') {
+                        Token::IsEqual
+                    } else {
+                        println!("Error: unexpected character: {}", self.peek());
+                        bail!("bad character")
+                    }
+                }
+
                 ' ' | '\t' => continue,
 
                 '~' => Token::Complement,

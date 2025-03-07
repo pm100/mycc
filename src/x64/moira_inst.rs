@@ -19,6 +19,11 @@ pub enum BinaryOperator {
     Add,
     Sub,
     Mult,
+    BitAnd,
+    BitOr,
+    BitXor,
+    ShiftLeft,
+    ShiftRight,
 }
 #[derive(Debug, Clone)]
 pub enum Operand {
@@ -33,4 +38,5 @@ pub enum Register {
     DX,
     R10,
     R11,
+    CL,
 }
