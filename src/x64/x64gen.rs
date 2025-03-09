@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::{io::BufWriter, path::Path};
 
-use super::moira_inst::{BinaryOperator, Instruction, Operand, Register, UnaryOperator};
+use super::moira_inst::{BinaryOperator, CondCode, Instruction, Operand, Register, UnaryOperator};
 pub struct X64CodeGenerator {
     pseudo_registers: HashMap<String, i32>,
     next_offset: i32,
@@ -97,7 +97,6 @@ impl X64CodeGenerator {
             Instruction::Mov(src, dest) => {
                 let mut src_str = self.get_operand(src)?;
                 let dest_str = self.get_operand(dest)?;
-                println!("{:?} {:?} ", src_str, dest_str);
                 if dest_str == "cl" && Self::is_stack(src) {
                     src_str = src_str.replace("DWORD", "BYTE");
                 }
@@ -133,7 +132,31 @@ impl X64CodeGenerator {
             Instruction::Cdq => {
                 writeln!(writer, "        cdq")?;
             }
-            _ => bail!("Unsupported instruction"),
+            Instruction::Cmp(left, right) => {
+                let left_str = self.get_operand(left)?;
+                let right_str = self.get_operand(right)?;
+                writeln!(writer, "        cmp {}, {}", right_str, left_str)?;
+            }
+            Instruction::Jmp(label) => {
+                writeln!(writer, "        jmp {}", label)?;
+            }
+            Instruction::JmpCC(cond, label) => {
+                writeln!(writer, "        j{} {}", Self::translate_cc(cond), label)?;
+            }
+            Instruction::SetCC(cond, dest) => {
+                let dest_str = self.get_operand(dest)?.replace("DWORD", "BYTE");
+
+                writeln!(
+                    writer,
+                    "        set{} {}",
+                    Self::translate_cc(cond),
+                    dest_str
+                )?;
+            }
+            Instruction::Label(label) => {
+                writeln!(writer, "{}:", label)?;
+            }
+            _ => bail!("Unsupported instruction {:?}", instruction),
         }
         Ok(())
     }
@@ -256,6 +279,27 @@ impl X64CodeGenerator {
                         new_instructions.push(Instruction::Idiv(self.fix_pseudo(operand)?));
                     }
                 }
+                Instruction::Cmp(src, dest) => {
+                    let new_dest = self.fix_pseudo(dest)?;
+                    let new_src = self.fix_pseudo(src)?;
+                    if Self::is_constant(&new_dest) {
+                        let scratch = Operand::Register(SCRATCH_REGISTER2);
+                        new_instructions.push(Instruction::Mov(new_dest, scratch.clone()));
+                        new_instructions.push(Instruction::Cmp(new_src.clone(), scratch.clone()));
+                    } else {
+                        if Self::is_stack(&new_dest) && Self::is_stack(&new_src) {
+                            let scratch = Operand::Register(SCRATCH_REGISTER1);
+                            new_instructions.push(Instruction::Mov(new_dest, scratch.clone()));
+                            new_instructions
+                                .push(Instruction::Cmp(new_src.clone(), scratch.clone()));
+                        } else {
+                            new_instructions.push(Instruction::Cmp(new_src, new_dest));
+                        }
+                    }
+                }
+                Instruction::SetCC(cond, dest) => {
+                    new_instructions.push(Instruction::SetCC(cond.clone(), self.fix_pseudo(dest)?));
+                }
                 _ => {
                     new_instructions.push(instruction.clone());
                 }
@@ -269,7 +313,20 @@ impl X64CodeGenerator {
     fn is_stack(operand: &Operand) -> bool {
         matches!(operand, Operand::Stack(_))
     }
-
+    fn is_constant(operand: &Operand) -> bool {
+        matches!(operand, Operand::Immediate(_))
+    }
+    fn translate_cc(cc: &CondCode) -> String {
+        match cc {
+            CondCode::E => "e",
+            CondCode::NE => "ne",
+            CondCode::G => "g",
+            CondCode::GE => "ge",
+            CondCode::L => "l",
+            CondCode::LE => "le",
+        }
+        .to_string()
+    }
     fn get_operand_size(&self, operand: &Operand) -> i32 {
         match operand {
             Operand::Immediate(_) => 4,

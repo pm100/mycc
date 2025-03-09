@@ -136,6 +136,7 @@ impl Compiler {
     }
 
     fn msvc_asm(path: &Path, source: &Path, dest: &Path) -> Result<()> {
+        println!("msvc_asm: {:?} {:?} {:?}", path, source, dest);
         capture({
             Command::new(path)
                 .args([format!("/Fe{}", dest.display()).as_str()])

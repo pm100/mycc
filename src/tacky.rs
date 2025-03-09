@@ -7,12 +7,18 @@ pub enum Instruction {
     Return(Value),
     Unary(UnaryOperator, Value, Value),
     Binary(BinaryOperator, Value, Value, Value),
+    Copy(Value, Value),
+    Jump(String),
+    JumpIfZero(Value, String),
+    JumpIfNotZero(Value, String),
+    Label(String),
 }
 #[derive(Debug)]
 
 pub enum UnaryOperator {
     Negate,
     Complement,
+    LogicalNot,
 }
 #[derive(Debug)]
 pub enum BinaryOperator {
@@ -26,8 +32,7 @@ pub enum BinaryOperator {
     BitXor,
     ShiftLeft,
     ShiftRight,
-    LogicalAnd,
-    LogicalOr,
+
     Equal,
     NotEqual,
     LessThan,
@@ -90,6 +95,21 @@ impl TackyProgram {
                     }
                     Instruction::Binary(op, src1, src2, dest) => {
                         println!("  Binary {:?} {:?} {:?} {:?}", op, src1, src2, dest);
+                    }
+                    Instruction::Copy(src, dest) => {
+                        println!("  Copy {:?} {:?}", src, dest);
+                    }
+                    Instruction::Jump(label) => {
+                        println!("  Jump {:?}", label);
+                    }
+                    Instruction::JumpIfZero(val, label) => {
+                        println!("  JumpIfZero {:?} {:?}", val, label);
+                    }
+                    Instruction::JumpIfNotZero(val, label) => {
+                        println!("  JumpIfNotZero {:?} {:?}", val, label);
+                    }
+                    Instruction::Label(label) => {
+                        println!("  Label {:?}", label);
                     }
                 }
             }

@@ -6,6 +6,11 @@ pub enum Instruction {
     Binary(BinaryOperator, Operand, Operand),
     Idiv(Operand),
     Cdq,
+    Cmp(Operand, Operand),
+    Jmp(String),
+    JmpCC(CondCode, String),
+    SetCC(CondCode, Operand),
+    Label(String),
     AllocateStack(i32),
 }
 #[derive(Debug, Clone)]
@@ -39,4 +44,13 @@ pub enum Register {
     R10,
     R11,
     CL,
+}
+#[derive(Debug, Clone)]
+pub enum CondCode {
+    E,
+    NE,
+    G,
+    GE,
+    L,
+    LE,
 }

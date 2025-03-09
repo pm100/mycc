@@ -95,18 +95,61 @@ impl Parser {
             if Self::precedence(&token) < min_prec {
                 break;
             }
-            let op = self.do_binop()?;
-            let right = self.do_expression(Self::precedence(&token) + 1)?;
-            let dest = Value::Variable(self.make_temporary());
-            let inst = Instruction::Binary(op, left, right, dest.clone());
-            self.tacky.add_instruction(inst);
+            let dest = if token == Token::LogicalAnd {
+                self.next_token()?;
+                let label_false = self.make_label();
+                let label_end = self.make_label();
+                self.tacky
+                    .add_instruction(Instruction::JumpIfZero(left, label_false.clone()));
+                let right = self.do_expression(Self::precedence(&token) + 1)?;
+                self.tacky
+                    .add_instruction(Instruction::JumpIfZero(right, label_false.clone()));
+
+                let dest = Value::Variable(self.make_temporary());
+                self.tacky
+                    .add_instruction(Instruction::Copy(Value::Int(1), dest.clone()));
+                self.tacky
+                    .add_instruction(Instruction::Jump(label_end.clone()));
+                self.instruction(Instruction::Label(label_false.clone()));
+                self.tacky
+                    .add_instruction(Instruction::Copy(Value::Int(0), dest.clone()));
+                self.instruction(Instruction::Label(label_end.clone()));
+                dest
+            } else if token == Token::LogicalOr {
+                self.next_token()?;
+                let label_true = self.make_label();
+                let label_end = self.make_label();
+                self.tacky
+                    .add_instruction(Instruction::JumpIfNotZero(left, label_true.clone()));
+                let right = self.do_expression(Self::precedence(&token) + 1)?;
+                self.tacky
+                    .add_instruction(Instruction::JumpIfNotZero(right, label_true.clone()));
+
+                let dest = Value::Variable(self.make_temporary());
+                self.tacky
+                    .add_instruction(Instruction::Copy(Value::Int(0), dest.clone()));
+                self.tacky
+                    .add_instruction(Instruction::Jump(label_end.clone()));
+                self.instruction(Instruction::Label(label_true.clone()));
+                self.tacky
+                    .add_instruction(Instruction::Copy(Value::Int(1), dest.clone()));
+                self.instruction(Instruction::Label(label_end.clone()));
+                dest
+            } else {
+                let op = self.convert_binop()?;
+                let right = self.do_expression(Self::precedence(&token) + 1)?;
+                let dest = Value::Variable(self.make_temporary());
+                let inst = Instruction::Binary(op, left, right, dest.clone());
+                self.tacky.add_instruction(inst);
+                dest
+            };
             left = dest;
             token = self.peek()?;
         }
         Ok(left)
     }
 
-    fn do_binop(&mut self) -> Result<BinaryOperator> {
+    fn convert_binop(&mut self) -> Result<BinaryOperator> {
         let token = self.next_token()?;
         match token {
             Token::Add => Ok(BinaryOperator::Add),
@@ -119,9 +162,13 @@ impl Parser {
             Token::BitwiseXor => Ok(BinaryOperator::BitXor),
             Token::ShiftLeft => Ok(BinaryOperator::ShiftLeft),
             Token::ShiftRight => Ok(BinaryOperator::ShiftRight),
-            Token::LogicalAnd => Ok(BinaryOperator::LogicalAnd),
-            Token::LogicalOr => Ok(BinaryOperator::LogicalOr),
             Token::IsEqual => Ok(BinaryOperator::Equal),
+            Token::IsNotEqual => Ok(BinaryOperator::NotEqual),
+            Token::LessThan => Ok(BinaryOperator::LessThan),
+            Token::LessThanOrEqual => Ok(BinaryOperator::LessThanOrEqual),
+            Token::GreaterThan => Ok(BinaryOperator::GreaterThan),
+            Token::GreaterThanOrEqual => Ok(BinaryOperator::GreaterThanOrEqual),
+
             _ => bail!("Expected binop, got {:?}", token),
         }
     }
@@ -160,9 +207,17 @@ impl Parser {
                 self.expect(Token::RightParen)?;
                 Ok(ret)
             }
+            Token::Not => {
+                let source = self.do_factor()?;
+                let dest_name = self.make_temporary();
+                let ret_dest = Value::Variable(dest_name.clone());
+                let unop = Instruction::Unary(UnaryOperator::LogicalNot, source, ret_dest.clone());
+                self.tacky.add_instruction(unop);
+                Ok(ret_dest)
+            }
             _ => {
-                println!("huh? {:?}", token);
-                bail!("huh? {:?}", token);
+                //println!("huh? {:?}", token);
+                panic!("huh? {:?}", token);
             }
         }
     }
@@ -180,7 +235,15 @@ impl Parser {
         self.next_temporary += 1;
         temp
     }
+    fn make_label(&mut self) -> String {
+        let temp = format!("label_{}", self.next_temporary);
+        self.next_temporary += 1;
+        temp
+    }
 
+    fn instruction(&mut self, instruction: Instruction) {
+        self.tacky.add_instruction(instruction);
+    }
     fn next_token(&mut self) -> Result<Token> {
         if let Some(peeked) = self.peeked_token.take() {
             return Ok(peeked);

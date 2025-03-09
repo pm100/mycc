@@ -1,7 +1,7 @@
 use crate::{codegen::MoiraGenerator, moira::MoiraProgram, tacky::TackyProgram};
 use anyhow::Result;
 
-use super::moira_inst::{BinaryOperator, Instruction, Operand, Register, UnaryOperator};
+use super::moira_inst::{BinaryOperator, CondCode, Instruction, Operand, Register, UnaryOperator};
 pub struct X64MoiraGenerator {
     moira: MoiraProgram<Instruction>,
 }
@@ -39,111 +39,137 @@ impl X64MoiraGenerator {
                 let value = self.get_value(value);
                 let value1 = self.get_value(value1);
 
+                let op = match unary_operator {
+                    tacky::UnaryOperator::Negate => UnaryOperator::Neg,
+                    tacky::UnaryOperator::Complement => UnaryOperator::Not,
+                    tacky::UnaryOperator::LogicalNot => {
+                        self.moira.add_instruction(Instruction::Cmp(
+                            Operand::Immediate(0),
+                            value.clone(),
+                        ));
+                        self.moira.add_instruction(Instruction::Mov(
+                            Operand::Immediate(0),
+                            value1.clone(),
+                        ));
+                        self.moira
+                            .add_instruction(Instruction::SetCC(CondCode::E, value1.clone()));
+                        return Ok(());
+                    }
+                };
                 self.moira
                     .add_instruction(Instruction::Mov(value, value1.clone()));
-
-                let op = match unary_operator {
-                    crate::tacky::UnaryOperator::Negate => UnaryOperator::Neg,
-                    crate::tacky::UnaryOperator::Complement => UnaryOperator::Not,
-                };
                 self.moira.add_instruction(Instruction::Unary(op, value1));
             }
             tacky::Instruction::Binary(binary_operator, src1, src2, dest) => {
-                let src1 = self.get_value(src1);
-                let src2 = self.get_value(src2);
+                self.gen_binary(binary_operator, src1, src2, dest)?;
+            }
+            tacky::Instruction::Copy(src, dest) => {
+                let src = self.get_value(src);
                 let dest = self.get_value(dest);
+                self.moira.add_instruction(Instruction::Mov(src, dest));
+            }
+            tacky::Instruction::Jump(label) => {
+                self.moira.add_instruction(Instruction::Jmp(label.clone()));
+            }
+            tacky::Instruction::JumpIfZero(value, label) => {
+                let value = self.get_value(value);
+                self.moira
+                    .add_instruction(Instruction::Cmp(Operand::Immediate(0), value.clone()));
+                self.moira
+                    .add_instruction(Instruction::JmpCC(CondCode::E, label.clone()));
+            }
+            tacky::Instruction::JumpIfNotZero(value, label) => {
+                let value = self.get_value(value);
+                self.moira
+                    .add_instruction(Instruction::Cmp(Operand::Immediate(0), value.clone()));
+                self.moira
+                    .add_instruction(Instruction::JmpCC(CondCode::NE, label.clone()));
+            }
+            tacky::Instruction::Label(label) => {
+                self.moira
+                    .add_instruction(Instruction::Label(label.clone()));
+            }
+        }
+        Ok(())
+    }
+    fn gen_binary(
+        &mut self,
+        binary_operator: &tacky::BinaryOperator,
+        src1: &tacky::Value,
+        src2: &tacky::Value,
+        dest: &tacky::Value,
+    ) -> Result<()> {
+        let src1 = self.get_value(src1);
+        let src2 = self.get_value(src2);
+        let dest = self.get_value(dest);
 
-                let op = match binary_operator {
-                    tacky::BinaryOperator::Add => Some(BinaryOperator::Add),
-                    tacky::BinaryOperator::Subtract => Some(BinaryOperator::Sub),
-                    tacky::BinaryOperator::Multiply => Some(BinaryOperator::Mult),
-                    tacky::BinaryOperator::BitAnd => Some(BinaryOperator::BitAnd),
-                    tacky::BinaryOperator::BitOr => Some(BinaryOperator::BitOr),
-                    tacky::BinaryOperator::BitXor => Some(BinaryOperator::BitXor),
-                    tacky::BinaryOperator::ShiftLeft => Some(BinaryOperator::ShiftLeft),
-                    tacky::BinaryOperator::ShiftRight => Some(BinaryOperator::ShiftRight),
-                    _ => None,
-                };
+        let op = match binary_operator {
+            tacky::BinaryOperator::Add => Some(BinaryOperator::Add),
+            tacky::BinaryOperator::Subtract => Some(BinaryOperator::Sub),
+            tacky::BinaryOperator::Multiply => Some(BinaryOperator::Mult),
+            tacky::BinaryOperator::BitAnd => Some(BinaryOperator::BitAnd),
+            tacky::BinaryOperator::BitOr => Some(BinaryOperator::BitOr),
+            tacky::BinaryOperator::BitXor => Some(BinaryOperator::BitXor),
+            tacky::BinaryOperator::ShiftLeft => Some(BinaryOperator::ShiftLeft),
+            tacky::BinaryOperator::ShiftRight => Some(BinaryOperator::ShiftRight),
+            _ => None,
+        };
 
-                if let Some(op) = op {
+        if let Some(op) = op {
+            self.moira
+                .add_instruction(Instruction::Mov(src1, dest.clone()));
+            self.moira
+                .add_instruction(Instruction::Binary(op, src2, dest));
+        } else {
+            match binary_operator {
+                tacky::BinaryOperator::Divide | tacky::BinaryOperator::Remainder => {
                     self.moira
-                        .add_instruction(Instruction::Mov(src1, dest.clone()));
-                    self.moira
-                        .add_instruction(Instruction::Binary(op, src2, dest));
-                } else {
+                        .add_instruction(Instruction::Mov(src1, Operand::Register(Register::AX)));
+                    self.moira.add_instruction(Instruction::Cdq);
+                    self.moira.add_instruction(Instruction::Idiv(src2));
+
                     match binary_operator {
-                        // tacky::BinaryOperator::ShiftLeft => {
-                        //     self.moira.add_instruction(Instruction::Mov(
-                        //         src1,
-                        //         Operand::Register(Register::AX),
-                        //     ));
-                        //     self.moira.add_instruction(Instruction::Mov(
-                        //         src2,
-                        //         Operand::Register(Register::CL),
-                        //     ));
-                        //     self.moira.add_instruction(Instruction::Binary(
-                        //         BinaryOperator::ShiftLeft,
-                        //         Operand::Register(Register::CL),
-                        //         Operand::Register(Register::AX),
-                        //     ));
-                        //     self.moira.add_instruction(Instruction::Mov(
-                        //         Operand::Register(Register::AX),
-                        //         dest,
-                        //     ));
-                        // }
-                        // tacky::BinaryOperator::ShiftRight => {
-                        //     self.moira.add_instruction(Instruction::Mov(
-                        //         src1,
-                        //         Operand::Register(Register::AX),
-                        //     ));
-                        //     self.moira.add_instruction(Instruction::Mov(
-                        //         src2,
-                        //         Operand::Register(Register::CL),
-                        //     ));
-                        //     self.moira.add_instruction(Instruction::Binary(
-                        //         BinaryOperator::ShiftRight,
-                        //         Operand::Register(Register::CL),
-                        //         Operand::Register(Register::AX),
-                        //     ));
-                        //     self.moira.add_instruction(Instruction::Mov(
-                        //         Operand::Register(Register::AX),
-                        //         dest,
-                        //     ));
-                        // }
-                        //  _ => {}
-                        tacky::BinaryOperator::Divide | tacky::BinaryOperator::Remainder => {
-                            self.moira.add_instruction(Instruction::Mov(
-                                src1,
-                                Operand::Register(Register::AX),
-                            ));
-                            self.moira.add_instruction(Instruction::Cdq);
-                            self.moira.add_instruction(Instruction::Idiv(src2));
-
-                            match binary_operator {
-                                tacky::BinaryOperator::Divide => {
-                                    let instruction =
-                                        Instruction::Mov(Operand::Register(Register::AX), dest);
-                                    self.moira.add_instruction(instruction);
-                                }
-                                tacky::BinaryOperator::Remainder => {
-                                    let instruction =
-                                        Instruction::Mov(Operand::Register(Register::DX), dest);
-                                    self.moira.add_instruction(instruction);
-                                }
-
-                                _ => panic!("Unsupported binary operator"),
-                            }
+                        tacky::BinaryOperator::Divide => {
+                            let instruction =
+                                Instruction::Mov(Operand::Register(Register::AX), dest);
+                            self.moira.add_instruction(instruction);
                         }
-                        _ => {
-                            panic!("Unsupported binary operator");
+                        tacky::BinaryOperator::Remainder => {
+                            let instruction =
+                                Instruction::Mov(Operand::Register(Register::DX), dest);
+                            self.moira.add_instruction(instruction);
                         }
+
+                        _ => unreachable!(),
                     }
+                }
+                tacky::BinaryOperator::Equal
+                | tacky::BinaryOperator::NotEqual
+                | tacky::BinaryOperator::LessThan
+                | tacky::BinaryOperator::LessThanOrEqual
+                | tacky::BinaryOperator::GreaterThan
+                | tacky::BinaryOperator::GreaterThanOrEqual => {
+                    self.moira.add_instruction(Instruction::Cmp(src2, src1));
+                    self.moira
+                        .add_instruction(Instruction::Mov(Operand::Immediate(0), dest.clone()));
+                    let cc = match binary_operator {
+                        tacky::BinaryOperator::Equal => CondCode::E,
+                        tacky::BinaryOperator::NotEqual => CondCode::NE,
+                        tacky::BinaryOperator::LessThan => CondCode::L,
+                        tacky::BinaryOperator::LessThanOrEqual => CondCode::LE,
+                        tacky::BinaryOperator::GreaterThan => CondCode::G,
+                        tacky::BinaryOperator::GreaterThanOrEqual => CondCode::GE,
+                        _ => unreachable!(),
+                    };
+                    self.moira.add_instruction(Instruction::SetCC(cc, dest));
+                }
+                _ => {
+                    unreachable!();
                 }
             }
         }
         Ok(())
     }
-
     fn get_value(&self, value: &crate::tacky::Value) -> Operand {
         match value {
             tacky::Value::Int(value) => Operand::Immediate(*value),
@@ -161,7 +187,4 @@ impl MoiraGenerator for X64MoiraGenerator {
         }
         Ok(&self.moira)
     }
-    // fn build(&mut self, source: &Path, output: &Path) -> Result<()> {
-    //     crate::cpp::assemble_link(source, output)
-    // }
 }
