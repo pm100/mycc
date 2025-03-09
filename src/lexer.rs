@@ -14,6 +14,7 @@ pub enum Token {
     LeftBrace,
     RightBrace,
     SemiColon,
+    Equals,
 
     // basics
     Identifier(String),
@@ -151,8 +152,7 @@ impl Lexer {
                     if self.match_next('=') {
                         Token::IsEqual
                     } else {
-                        println!("Error: unexpected character: {}", self.peek());
-                        bail!("bad character")
+                        Token::Equals
                     }
                 }
 
@@ -174,7 +174,7 @@ impl Lexer {
                             bail!("bad character")
                         }
                         t
-                    } else if char.is_alphabetic() {
+                    } else if char.is_alphabetic() || char == '_' {
                         self.identifier()
                     } else {
                         println!("Error: unexpected character: {}", char);
@@ -184,13 +184,11 @@ impl Lexer {
             };
             return Ok(token);
         }
-        //   self.current_line.clear();
-        //  Some(LexReturn::Token(Token::Constant(42)))
     }
 
     fn identifier(&mut self) -> Token {
         let start = self.current_pos - 1;
-        while self.peek().is_alphanumeric() {
+        while self.peek().is_alphanumeric() || self.peek() == '_' {
             self.advance();
         }
         let s = &self.current_line[start..self.current_pos];

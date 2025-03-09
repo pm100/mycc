@@ -1,5 +1,5 @@
 use anyhow::{bail, Result};
-use std::{mem::discriminant, path::Path};
+use std::{collections::HashMap, mem::discriminant, path::Path};
 
 // https://users.rust-lang.org/t/how-to-parameterize-a-function-or-macro-by-enum-variant/126398
 macro_rules! expect {
@@ -23,6 +23,7 @@ pub struct Parser {
     next_temporary: usize,
     eof_hit: bool,
     peeked_token: Option<Token>,
+    variables: HashMap<String, String>,
 }
 
 impl Parser {
@@ -33,6 +34,7 @@ impl Parser {
             next_temporary: 0,
             eof_hit: false,
             peeked_token: None,
+            variables: HashMap::new(),
         }
     }
 
@@ -65,24 +67,71 @@ impl Parser {
 
     fn do_function_body(&mut self) -> Result<()> {
         self.expect(Token::LeftBrace)?;
-        self.do_statement()?;
-        self.expect(Token::RightBrace)?;
+        while self.peek()? != Token::RightBrace {
+            self.do_block_item()?;
+        }
+        self.next_token()?;
+        self.tacky
+            .add_instruction(Instruction::Return(Value::Int(0)));
+        Ok(())
+    }
+    fn do_block_item(&mut self) -> Result<()> {
+        let token = self.peek()?;
+        match token {
+            Token::Int => self.do_declaration()?,
+            _ => self.do_statement()?,
+        }
+        Ok(())
+    }
+    fn do_declaration(&mut self) -> Result<()> {
+        self.next_token()?;
+
+        let name = expect!(self, Token::Identifier);
+        let token = self.peek()?;
+        let init = if token == Token::Equals {
+            self.next_token()?;
+            true
+        } else {
+            false
+        };
+        self.do_variable_dec(&name, init)?;
+        self.expect(Token::SemiColon)?;
+
         Ok(())
     }
 
+    fn do_variable_dec(&mut self, name: &str, init: bool) -> Result<()> {
+        if let Some(var) = self.variables.get(name) {
+            panic!("Variable {} already declared", var);
+        }
+        let new_name = self.make_temporary();
+        println!("new_name: {}=>{}", name, new_name);
+        self.variables
+            .insert(name.to_string(), new_name.to_string());
+        if init {
+            let val = self.do_expression(0)?;
+            self.tacky
+                .add_instruction(Instruction::Copy(val, Value::Variable(new_name)));
+        }
+        Ok(())
+    }
     fn do_statement(&mut self) -> Result<()> {
-        let token = self.lexer.next_token();
+        let token = self.peek()?;
         match token {
-            Ok(Token::Return) => {
+            Token::Return => {
                 self.do_return()?;
             }
-            _ => panic!("Expected Return, got {:?}", token),
-        }
+            Token::SemiColon => {}
+            _ => {
+                self.do_expression(0)?;
+            }
+        };
         self.expect(Token::SemiColon)?;
         Ok(())
     }
 
     fn do_return(&mut self) -> Result<()> {
+        self.next_token()?;
         let val = self.do_expression(0)?;
         self.tacky.add_instruction(Instruction::Return(val));
         Ok(())
@@ -95,53 +144,78 @@ impl Parser {
             if Self::precedence(&token) < min_prec {
                 break;
             }
-            let dest = if token == Token::LogicalAnd {
-                self.next_token()?;
-                let label_false = self.make_label();
-                let label_end = self.make_label();
-                self.tacky
-                    .add_instruction(Instruction::JumpIfZero(left, label_false.clone()));
-                let right = self.do_expression(Self::precedence(&token) + 1)?;
-                self.tacky
-                    .add_instruction(Instruction::JumpIfZero(right, label_false.clone()));
+            let dest = match token {
+                Token::Equals => {
+                    self.next_token()?;
+                    if let Value::Variable(ref var) = left {
+                        let lookup = self.variables.values().any(|v| v == var);
+                        if !lookup {
+                            bail!("Variable {} not declared", var);
+                        }
+                        // let left_var = lookup.unwrap().clone();
+                        // println!("left_var: {}=>{}", var, left_var);
+                        let right = self.do_expression(0)?;
+                        let inst = Instruction::Copy(right.clone(), left);
+                        self.tacky.add_instruction(inst);
+                        right
+                    } else {
+                        bail!("Expected variable, got {:?}", left);
+                    }
+                    // let right = self.do_expression(Self::precedence(&token))?;
+                    // let dest = Value::Variable(self.make_temporary());
+                    // let inst = Instruction::Copy(right, dest.clone());
+                    // self.tacky.add_instruction(inst);
+                }
+                Token::LogicalAnd => {
+                    self.next_token()?;
+                    let label_false = self.make_label();
+                    let label_end = self.make_label();
+                    self.tacky
+                        .add_instruction(Instruction::JumpIfZero(left, label_false.clone()));
+                    let right = self.do_expression(Self::precedence(&token) + 1)?;
+                    self.tacky
+                        .add_instruction(Instruction::JumpIfZero(right, label_false.clone()));
 
-                let dest = Value::Variable(self.make_temporary());
-                self.tacky
-                    .add_instruction(Instruction::Copy(Value::Int(1), dest.clone()));
-                self.tacky
-                    .add_instruction(Instruction::Jump(label_end.clone()));
-                self.instruction(Instruction::Label(label_false.clone()));
-                self.tacky
-                    .add_instruction(Instruction::Copy(Value::Int(0), dest.clone()));
-                self.instruction(Instruction::Label(label_end.clone()));
-                dest
-            } else if token == Token::LogicalOr {
-                self.next_token()?;
-                let label_true = self.make_label();
-                let label_end = self.make_label();
-                self.tacky
-                    .add_instruction(Instruction::JumpIfNotZero(left, label_true.clone()));
-                let right = self.do_expression(Self::precedence(&token) + 1)?;
-                self.tacky
-                    .add_instruction(Instruction::JumpIfNotZero(right, label_true.clone()));
+                    let dest = Value::Variable(self.make_temporary());
+                    self.tacky
+                        .add_instruction(Instruction::Copy(Value::Int(1), dest.clone()));
+                    self.tacky
+                        .add_instruction(Instruction::Jump(label_end.clone()));
+                    self.instruction(Instruction::Label(label_false.clone()));
+                    self.tacky
+                        .add_instruction(Instruction::Copy(Value::Int(0), dest.clone()));
+                    self.instruction(Instruction::Label(label_end.clone()));
+                    dest
+                }
+                Token::LogicalOr => {
+                    self.next_token()?;
+                    let label_true = self.make_label();
+                    let label_end = self.make_label();
+                    self.tacky
+                        .add_instruction(Instruction::JumpIfNotZero(left, label_true.clone()));
+                    let right = self.do_expression(Self::precedence(&token) + 1)?;
+                    self.tacky
+                        .add_instruction(Instruction::JumpIfNotZero(right, label_true.clone()));
 
-                let dest = Value::Variable(self.make_temporary());
-                self.tacky
-                    .add_instruction(Instruction::Copy(Value::Int(0), dest.clone()));
-                self.tacky
-                    .add_instruction(Instruction::Jump(label_end.clone()));
-                self.instruction(Instruction::Label(label_true.clone()));
-                self.tacky
-                    .add_instruction(Instruction::Copy(Value::Int(1), dest.clone()));
-                self.instruction(Instruction::Label(label_end.clone()));
-                dest
-            } else {
-                let op = self.convert_binop()?;
-                let right = self.do_expression(Self::precedence(&token) + 1)?;
-                let dest = Value::Variable(self.make_temporary());
-                let inst = Instruction::Binary(op, left, right, dest.clone());
-                self.tacky.add_instruction(inst);
-                dest
+                    let dest = Value::Variable(self.make_temporary());
+                    self.tacky
+                        .add_instruction(Instruction::Copy(Value::Int(0), dest.clone()));
+                    self.tacky
+                        .add_instruction(Instruction::Jump(label_end.clone()));
+                    self.instruction(Instruction::Label(label_true.clone()));
+                    self.tacky
+                        .add_instruction(Instruction::Copy(Value::Int(1), dest.clone()));
+                    self.instruction(Instruction::Label(label_end.clone()));
+                    dest
+                }
+                _ => {
+                    let op = self.convert_binop()?;
+                    let right = self.do_expression(Self::precedence(&token) + 1)?;
+                    let dest = Value::Variable(self.make_temporary());
+                    let inst = Instruction::Binary(op, left, right, dest.clone());
+                    self.tacky.add_instruction(inst);
+                    dest
+                }
             };
             left = dest;
             token = self.peek()?;
@@ -214,6 +288,13 @@ impl Parser {
                 let unop = Instruction::Unary(UnaryOperator::LogicalNot, source, ret_dest.clone());
                 self.tacky.add_instruction(unop);
                 Ok(ret_dest)
+            }
+            Token::Identifier(name) => {
+                if let Some(var) = self.variables.get(&name) {
+                    Ok(Value::Variable(var.clone()))
+                } else {
+                    bail!("Variable {} not declared", name);
+                }
             }
             _ => {
                 //println!("huh? {:?}", token);
@@ -290,6 +371,7 @@ impl Parser {
             Token::BitwiseOr => 23,
             Token::LogicalAnd => 22,
             Token::LogicalOr => 21,
+            Token::Equals => 1,
 
             _ => -1, // indicates this is not a binop
         }

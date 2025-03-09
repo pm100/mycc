@@ -286,15 +286,12 @@ impl X64CodeGenerator {
                         let scratch = Operand::Register(SCRATCH_REGISTER2);
                         new_instructions.push(Instruction::Mov(new_dest, scratch.clone()));
                         new_instructions.push(Instruction::Cmp(new_src.clone(), scratch.clone()));
+                    } else if Self::is_stack(&new_dest) && Self::is_stack(&new_src) {
+                        let scratch = Operand::Register(SCRATCH_REGISTER1);
+                        new_instructions.push(Instruction::Mov(new_dest, scratch.clone()));
+                        new_instructions.push(Instruction::Cmp(new_src.clone(), scratch.clone()));
                     } else {
-                        if Self::is_stack(&new_dest) && Self::is_stack(&new_src) {
-                            let scratch = Operand::Register(SCRATCH_REGISTER1);
-                            new_instructions.push(Instruction::Mov(new_dest, scratch.clone()));
-                            new_instructions
-                                .push(Instruction::Cmp(new_src.clone(), scratch.clone()));
-                        } else {
-                            new_instructions.push(Instruction::Cmp(new_src, new_dest));
-                        }
+                        new_instructions.push(Instruction::Cmp(new_src, new_dest));
                     }
                 }
                 Instruction::SetCC(cond, dest) => {

@@ -33,6 +33,8 @@ struct Cli {
     parse: bool,
     #[arg(long)]
     codegen: bool,
+    #[arg(long)]
+    validate: bool,
 }
 fn main() -> ExitCode {
     let mut cli = Cli::parse();
@@ -40,6 +42,7 @@ fn main() -> ExitCode {
     println!("lex: {:?}", cli.lex);
     println!("parse: {:?}", cli.parse);
     println!("codegen: {:?}", cli.codegen);
+    println!("validate: {:?}", cli.validate);
     println!("source: {:?}", &cli.source);
 
     let stub = "mycc_cpp";
@@ -55,7 +58,7 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    if cli.parse {
+    if cli.parse || cli.validate {
         if parse(&preproc_output).is_ok() {
             return ExitCode::SUCCESS;
         };
