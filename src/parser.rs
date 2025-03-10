@@ -236,6 +236,142 @@ impl Parser {
         Ok(left)
     }
 
+    fn do_factor(&mut self) -> Result<Value> {
+        let token = self.next_token()?;
+        match token {
+            Token::Constant(val) => {
+                println!("val: {}", val);
+                Ok(Value::Int(val))
+            }
+            Token::PlusPlus => {
+                let source = self.do_factor()?;
+                let dest_name = self.make_temporary();
+                let ret_dest = Value::Variable(dest_name.clone());
+                self.instruction(Instruction::Binary(
+                    BinaryOperator::Add,
+                    Value::Int(1),
+                    source.clone(),
+                    ret_dest.clone(),
+                ));
+                self.instruction(Instruction::Copy(ret_dest.clone(), source));
+                Ok(ret_dest)
+            }
+            Token::MinusMinus => {
+                let source = self.do_factor()?;
+                let dest_name = self.make_temporary();
+                let ret_dest = Value::Variable(dest_name.clone());
+                self.instruction(Instruction::Binary(
+                    BinaryOperator::Subtract,
+                    source.clone(),
+                    Value::Int(1),
+                    ret_dest.clone(),
+                ));
+                self.instruction(Instruction::Copy(ret_dest.clone(), source));
+                Ok(ret_dest)
+            }
+            Token::Negate => {
+                let source = self.do_factor()?;
+                let dest_name = self.make_temporary();
+                let ret_dest = Value::Variable(dest_name.clone());
+                let unop =
+                    Instruction::Unary(UnaryOperator::Negate, source, Value::Variable(dest_name));
+                self.tacky.add_instruction(unop);
+                Ok(ret_dest)
+            }
+
+            Token::Complement => {
+                let source = self.do_factor()?;
+                let dest_name = self.make_temporary();
+                let ret_dest = Value::Variable(dest_name.clone());
+                let unop = Instruction::Unary(
+                    UnaryOperator::Complement,
+                    source,
+                    Value::Variable(dest_name),
+                );
+                self.tacky.add_instruction(unop);
+                Ok(ret_dest)
+            }
+            Token::LeftParen => {
+                let ret = self.do_expression(0)?;
+                self.expect(Token::RightParen)?;
+                Ok(ret)
+            }
+            Token::Not => {
+                let source = self.do_factor()?;
+                let dest_name = self.make_temporary();
+                let ret_dest = Value::Variable(dest_name.clone());
+                let unop = Instruction::Unary(UnaryOperator::LogicalNot, source, ret_dest.clone());
+                self.tacky.add_instruction(unop);
+                Ok(ret_dest)
+            }
+            Token::Identifier(name) => {
+                if self.variables.contains_key(&name) {
+                    let var = self.variables.get(&name).unwrap().clone();
+                    let peek = self.peek()?;
+                    if peek == Token::PlusPlus {
+                        self.next_token()?;
+                        let dest_name = self.make_temporary();
+                        let ret_dest = Value::Variable(dest_name.clone());
+                        self.instruction(Instruction::Copy(
+                            Value::Variable(var.clone()),
+                            ret_dest.clone(),
+                        ));
+                        self.instruction(Instruction::Binary(
+                            BinaryOperator::Add,
+                            Value::Int(1),
+                            ret_dest.clone(),
+                            Value::Variable(var.clone()),
+                        ));
+
+                        Ok(ret_dest)
+                    } else if peek == Token::MinusMinus {
+                        self.next_token()?;
+                        let dest_name = self.make_temporary();
+                        let ret_dest = Value::Variable(dest_name.clone());
+                        self.instruction(Instruction::Copy(
+                            Value::Variable(var.clone()),
+                            ret_dest.clone(),
+                        ));
+                        self.instruction(Instruction::Binary(
+                            BinaryOperator::Subtract,
+                            ret_dest.clone(),
+                            Value::Int(1),
+                            Value::Variable(var.clone()),
+                        ));
+
+                        Ok(ret_dest)
+                    } else {
+                        Ok(Value::Variable(var.clone()))
+                    }
+                } else {
+                    bail!("Variable {} not declared", name);
+                }
+            }
+            _ => {
+                //println!("huh? {:?}", token);
+                panic!("huh? {:?}", token);
+            }
+        }
+    }
+    fn expect(&mut self, token: Token) -> Result<Token> {
+        let nt = self.next_token()?;
+        if discriminant(&nt) != discriminant(&token) {
+            bail!("Expected {:?}, got {:?}", token, nt);
+        } else {
+            Ok(nt)
+        }
+    }
+
+    fn make_temporary(&mut self) -> String {
+        let temp = format!("temp.{}", self.next_temporary);
+        self.next_temporary += 1;
+        temp
+    }
+    fn make_label(&mut self) -> String {
+        let temp = format!("label_{}", self.next_temporary);
+        self.next_temporary += 1;
+        temp
+    }
     fn convert_binop(&mut self) -> Result<BinaryOperator> {
         let token = self.next_token()?;
         match token {
@@ -275,82 +411,6 @@ impl Parser {
             _ => bail!("Expected compound, got {:?}", token),
         }
     }
-    fn do_factor(&mut self) -> Result<Value> {
-        let token = self.next_token()?;
-        match token {
-            Token::Constant(val) => {
-                println!("val: {}", val);
-                Ok(Value::Int(val))
-            }
-
-            Token::Negate => {
-                let source = self.do_factor()?;
-                let dest_name = self.make_temporary();
-                let ret_dest = Value::Variable(dest_name.clone());
-                let unop =
-                    Instruction::Unary(UnaryOperator::Negate, source, Value::Variable(dest_name));
-                self.tacky.add_instruction(unop);
-                Ok(ret_dest)
-            }
-
-            Token::Complement => {
-                let source = self.do_factor()?;
-                let dest_name = self.make_temporary();
-                let ret_dest = Value::Variable(dest_name.clone());
-                let unop = Instruction::Unary(
-                    UnaryOperator::Complement,
-                    source,
-                    Value::Variable(dest_name),
-                );
-                self.tacky.add_instruction(unop);
-                Ok(ret_dest)
-            }
-            Token::LeftParen => {
-                let ret = self.do_expression(0)?;
-                self.expect(Token::RightParen)?;
-                Ok(ret)
-            }
-            Token::Not => {
-                let source = self.do_factor()?;
-                let dest_name = self.make_temporary();
-                let ret_dest = Value::Variable(dest_name.clone());
-                let unop = Instruction::Unary(UnaryOperator::LogicalNot, source, ret_dest.clone());
-                self.tacky.add_instruction(unop);
-                Ok(ret_dest)
-            }
-            Token::Identifier(name) => {
-                if let Some(var) = self.variables.get(&name) {
-                    Ok(Value::Variable(var.clone()))
-                } else {
-                    bail!("Variable {} not declared", name);
-                }
-            }
-            _ => {
-                //println!("huh? {:?}", token);
-                panic!("huh? {:?}", token);
-            }
-        }
-    }
-    fn expect(&mut self, token: Token) -> Result<Token> {
-        let nt = self.next_token()?;
-        if discriminant(&nt) != discriminant(&token) {
-            bail!("Expected {:?}, got {:?}", token, nt);
-        } else {
-            Ok(nt)
-        }
-    }
-
-    fn make_temporary(&mut self) -> String {
-        let temp = format!("temp.{}", self.next_temporary);
-        self.next_temporary += 1;
-        temp
-    }
-    fn make_label(&mut self) -> String {
-        let temp = format!("label_{}", self.next_temporary);
-        self.next_temporary += 1;
-        temp
-    }
-
     fn instruction(&mut self, instruction: Instruction) {
         self.tacky.add_instruction(instruction);
     }
@@ -377,6 +437,9 @@ impl Parser {
 
     fn precedence(token: &Token) -> i32 {
         match token {
+            Token::PlusPlus => 100,
+            Token::MinusMinus => 100,
+
             Token::Multiply => 50,
             Token::Divide => 50,
             Token::Remainder => 50,

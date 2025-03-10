@@ -55,6 +55,9 @@ pub enum Token {
     ShiftLeftEquals,
     ShiftRightEquals,
 
+    PlusPlus,
+    MinusMinus,
+
     // keywords
     Int,
     Void,
@@ -200,14 +203,22 @@ impl Lexer {
                     if self.match_next('=') {
                         Token::MinusEquals
                     } else {
-                        Token::Negate
+                        if self.match_next('-') {
+                            Token::MinusMinus
+                        } else {
+                            Token::Negate
+                        }
                     }
                 }
                 '+' => {
                     if self.match_next('=') {
                         Token::PlusEquals
                     } else {
-                        Token::Add
+                        if self.match_next('+') {
+                            Token::PlusPlus
+                        } else {
+                            Token::Add
+                        }
                     }
                 }
                 '*' => {
