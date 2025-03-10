@@ -145,45 +145,63 @@ impl Parser {
                 break;
             }
             let dest = match token {
-                Token::Equals => {
+                Token::Equals
+                | Token::AndEquals
+                | Token::MinusEquals
+                | Token::DivideEquals
+                | Token::MultiplyEquals
+                | Token::XorEquals
+                | Token::OrEquals
+                | Token::PlusEquals
+                | Token::ShiftLeftEquals
+                | Token::ShiftRightEquals
+                | Token::RemainderEquals => {
                     self.next_token()?;
                     if let Value::Variable(ref var) = left {
                         let lookup = self.variables.values().any(|v| v == var);
                         if !lookup {
-                            bail!("Variable {} not declared", var);
+                            if var.starts_with("temp.") {
+                                // puke
+                                bail!("not lvalue");
+                            } else {
+                                bail!("Variable {} not declared", var);
+                            }
                         }
-                        // let left_var = lookup.unwrap().clone();
-                        // println!("left_var: {}=>{}", var, left_var);
-                        let right = self.do_expression(0)?;
-                        let inst = Instruction::Copy(right.clone(), left);
-                        self.tacky.add_instruction(inst);
-                        right
+                        println!("var: {} {:?}", var, token);
+                        let right = self.do_expression(Self::precedence(&token))?;
+                        if token == Token::Equals {
+                            let inst = Instruction::Copy(right.clone(), left.clone());
+                            self.tacky.add_instruction(inst);
+                            right
+                        } else {
+                            let op = Self::convert_compound(&token)?;
+                            let dest = Value::Variable(self.make_temporary());
+                            self.instruction(Instruction::Binary(
+                                op,
+                                left.clone(),
+                                right.clone(),
+                                left.clone(),
+                            ));
+                            self.instruction(Instruction::Copy(left.clone(), dest.clone()));
+                            dest
+                        }
                     } else {
                         bail!("Expected variable, got {:?}", left);
                     }
-                    // let right = self.do_expression(Self::precedence(&token))?;
-                    // let dest = Value::Variable(self.make_temporary());
-                    // let inst = Instruction::Copy(right, dest.clone());
-                    // self.tacky.add_instruction(inst);
                 }
                 Token::LogicalAnd => {
                     self.next_token()?;
                     let label_false = self.make_label();
                     let label_end = self.make_label();
-                    self.tacky
-                        .add_instruction(Instruction::JumpIfZero(left, label_false.clone()));
+                    self.instruction(Instruction::JumpIfZero(left, label_false.clone()));
                     let right = self.do_expression(Self::precedence(&token) + 1)?;
-                    self.tacky
-                        .add_instruction(Instruction::JumpIfZero(right, label_false.clone()));
+                    self.instruction(Instruction::JumpIfZero(right, label_false.clone()));
 
                     let dest = Value::Variable(self.make_temporary());
-                    self.tacky
-                        .add_instruction(Instruction::Copy(Value::Int(1), dest.clone()));
-                    self.tacky
-                        .add_instruction(Instruction::Jump(label_end.clone()));
+                    self.instruction(Instruction::Copy(Value::Int(1), dest.clone()));
+                    self.instruction(Instruction::Jump(label_end.clone()));
                     self.instruction(Instruction::Label(label_false.clone()));
-                    self.tacky
-                        .add_instruction(Instruction::Copy(Value::Int(0), dest.clone()));
+                    self.instruction(Instruction::Copy(Value::Int(0), dest.clone()));
                     self.instruction(Instruction::Label(label_end.clone()));
                     dest
                 }
@@ -191,20 +209,15 @@ impl Parser {
                     self.next_token()?;
                     let label_true = self.make_label();
                     let label_end = self.make_label();
-                    self.tacky
-                        .add_instruction(Instruction::JumpIfNotZero(left, label_true.clone()));
+                    self.instruction(Instruction::JumpIfNotZero(left, label_true.clone()));
                     let right = self.do_expression(Self::precedence(&token) + 1)?;
-                    self.tacky
-                        .add_instruction(Instruction::JumpIfNotZero(right, label_true.clone()));
+                    self.instruction(Instruction::JumpIfNotZero(right, label_true.clone()));
 
                     let dest = Value::Variable(self.make_temporary());
-                    self.tacky
-                        .add_instruction(Instruction::Copy(Value::Int(0), dest.clone()));
-                    self.tacky
-                        .add_instruction(Instruction::Jump(label_end.clone()));
+                    self.instruction(Instruction::Copy(Value::Int(0), dest.clone()));
+                    self.instruction(Instruction::Jump(label_end.clone()));
                     self.instruction(Instruction::Label(label_true.clone()));
-                    self.tacky
-                        .add_instruction(Instruction::Copy(Value::Int(1), dest.clone()));
+                    self.instruction(Instruction::Copy(Value::Int(1), dest.clone()));
                     self.instruction(Instruction::Label(label_end.clone()));
                     dest
                 }
@@ -244,6 +257,22 @@ impl Parser {
             Token::GreaterThanOrEqual => Ok(BinaryOperator::GreaterThanOrEqual),
 
             _ => bail!("Expected binop, got {:?}", token),
+        }
+    }
+    fn convert_compound(token: &Token) -> Result<BinaryOperator> {
+        match token {
+            //  Token::Equals => Ok(BinaryOperator::Equal),
+            Token::AndEquals => Ok(BinaryOperator::BitAnd),
+            Token::MinusEquals => Ok(BinaryOperator::Subtract),
+            Token::DivideEquals => Ok(BinaryOperator::Divide),
+            Token::MultiplyEquals => Ok(BinaryOperator::Multiply),
+            Token::XorEquals => Ok(BinaryOperator::BitXor),
+            Token::OrEquals => Ok(BinaryOperator::BitOr),
+            Token::PlusEquals => Ok(BinaryOperator::Add),
+            Token::ShiftLeftEquals => Ok(BinaryOperator::ShiftLeft),
+            Token::ShiftRightEquals => Ok(BinaryOperator::ShiftRight),
+            Token::RemainderEquals => Ok(BinaryOperator::Remainder),
+            _ => bail!("Expected compound, got {:?}", token),
         }
     }
     fn do_factor(&mut self) -> Result<Value> {
@@ -371,7 +400,18 @@ impl Parser {
             Token::BitwiseOr => 23,
             Token::LogicalAnd => 22,
             Token::LogicalOr => 21,
-            Token::Equals => 1,
+
+            Token::Equals => 10,
+            Token::AndEquals => 10,
+            Token::MinusEquals => 10,
+            Token::DivideEquals => 10,
+            Token::MultiplyEquals => 10,
+            Token::XorEquals => 10,
+            Token::OrEquals => 10,
+            Token::PlusEquals => 10,
+            Token::ShiftLeftEquals => 10,
+            Token::ShiftRightEquals => 10,
+            Token::RemainderEquals => 10,
 
             _ => -1, // indicates this is not a binop
         }

@@ -44,6 +44,17 @@ pub enum Token {
     ShiftLeft,
     ShiftRight,
 
+    PlusEquals,
+    MinusEquals,
+    MultiplyEquals,
+    DivideEquals,
+    RemainderEquals,
+    AndEquals,
+    OrEquals,
+    XorEquals,
+    ShiftLeftEquals,
+    ShiftRightEquals,
+
     // keywords
     Int,
     Void,
@@ -102,14 +113,22 @@ impl Lexer {
                         }
                         continue;
                     }
-                    Token::Divide
+                    if self.match_next('=') {
+                        Token::DivideEquals
+                    } else {
+                        Token::Divide
+                    }
                 }
 
                 '&' => {
                     if self.match_next('&') {
                         Token::LogicalAnd
                     } else {
-                        Token::BitwiseAnd
+                        if self.match_next('=') {
+                            Token::AndEquals
+                        } else {
+                            Token::BitwiseAnd
+                        }
                     }
                 }
 
@@ -117,16 +136,30 @@ impl Lexer {
                     if self.match_next('|') {
                         Token::LogicalOr
                     } else {
-                        Token::BitwiseOr
+                        if self.match_next('=') {
+                            Token::OrEquals
+                        } else {
+                            Token::BitwiseOr
+                        }
                     }
                 }
 
-                '^' => Token::BitwiseXor,
+                '^' => {
+                    if self.match_next('=') {
+                        Token::XorEquals
+                    } else {
+                        Token::BitwiseXor
+                    }
+                }
                 '<' => {
                     if self.match_next('=') {
                         Token::LessThanOrEqual
                     } else if self.match_next('<') {
-                        Token::ShiftLeft
+                        if self.match_next('=') {
+                            Token::ShiftLeftEquals
+                        } else {
+                            Token::ShiftLeft
+                        }
                     } else {
                         Token::LessThan
                     }
@@ -135,7 +168,11 @@ impl Lexer {
                     if self.match_next('=') {
                         Token::GreaterThanOrEqual
                     } else if self.match_next('>') {
-                        Token::ShiftRight
+                        if self.match_next('=') {
+                            Token::ShiftRightEquals
+                        } else {
+                            Token::ShiftRight
+                        }
                     } else {
                         Token::GreaterThan
                     }
@@ -159,11 +196,34 @@ impl Lexer {
                 ' ' | '\t' => continue,
 
                 '~' => Token::Complement,
-                '-' => Token::Negate,
-
-                '+' => Token::Add,
-                '*' => Token::Multiply,
-                '%' => Token::Remainder,
+                '-' => {
+                    if self.match_next('=') {
+                        Token::MinusEquals
+                    } else {
+                        Token::Negate
+                    }
+                }
+                '+' => {
+                    if self.match_next('=') {
+                        Token::PlusEquals
+                    } else {
+                        Token::Add
+                    }
+                }
+                '*' => {
+                    if self.match_next('=') {
+                        Token::MultiplyEquals
+                    } else {
+                        Token::Multiply
+                    }
+                }
+                '%' => {
+                    if self.match_next('=') {
+                        Token::RemainderEquals
+                    } else {
+                        Token::Remainder
+                    }
+                }
 
                 _ => {
                     if char.is_ascii_digit() {
