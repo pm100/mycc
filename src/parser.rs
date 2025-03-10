@@ -120,13 +120,20 @@ impl Parser {
         match token {
             Token::Return => {
                 self.do_return()?;
+                self.expect(Token::SemiColon)?;
             }
-            Token::SemiColon => {}
+            Token::If => {
+                self.do_if()?;
+            }
+            Token::SemiColon => {
+                self.next_token()?;
+            }
             _ => {
                 self.do_expression(0)?;
+                self.expect(Token::SemiColon)?;
             }
         };
-        self.expect(Token::SemiColon)?;
+
         Ok(())
     }
 
@@ -136,9 +143,27 @@ impl Parser {
         self.tacky.add_instruction(Instruction::Return(val));
         Ok(())
     }
-
+    fn do_if(&mut self) -> Result<()> {
+        self.next_token()?;
+        self.expect(Token::LeftParen)?;
+        let cond = self.do_expression(0)?;
+        self.expect(Token::RightParen)?;
+        let label_false = self.make_label();
+        let label_end = self.make_label();
+        self.instruction(Instruction::JumpIfZero(cond, label_false.clone()));
+        self.do_statement()?;
+        self.instruction(Instruction::Jump(label_end.clone()));
+        self.instruction(Instruction::Label(label_false.clone()));
+        if self.peek()? == Token::Else {
+            self.next_token()?;
+            self.do_statement()?;
+        }
+        self.instruction(Instruction::Label(label_end.clone()));
+        Ok(())
+    }
     fn do_expression(&mut self, min_prec: i32) -> Result<Value> {
         let mut left = self.do_factor()?;
+        println!("expleft: {:?}", left);
         let mut token = self.peek()?;
         loop {
             if Self::precedence(&token) < min_prec {
@@ -163,9 +188,9 @@ impl Parser {
                             if var.starts_with("temp.") {
                                 // puke
                                 bail!("not lvalue");
-                            } else {
-                                bail!("Variable {} not declared", var);
                             }
+
+                            bail!("Variable {} not declared", var);
                         }
                         println!("var: {} {:?}", var, token);
                         let right = self.do_expression(Self::precedence(&token))?;
@@ -188,6 +213,38 @@ impl Parser {
                     } else {
                         bail!("Expected variable, got {:?}", left);
                     }
+                }
+                Token::PlusPlus => {
+                    self.next_token()?;
+                    if !self.is_lvalue(&left) {
+                        bail!("not lvaluea");
+                    }
+                    let dest_name = self.make_temporary();
+                    let ret_dest = Value::Variable(dest_name.clone());
+                    self.instruction(Instruction::Copy(left.clone(), ret_dest.clone()));
+                    self.instruction(Instruction::Binary(
+                        BinaryOperator::Add,
+                        Value::Int(1),
+                        left.clone(),
+                        left.clone(),
+                    ));
+                    ret_dest
+                }
+                Token::MinusMinus => {
+                    self.next_token()?;
+                    if !self.is_lvalue(&left) {
+                        bail!("not lvalueb {:?}", left);
+                    }
+                    let dest_name = self.make_temporary();
+                    let ret_dest = Value::Variable(dest_name.clone());
+                    self.instruction(Instruction::Copy(left.clone(), ret_dest.clone()));
+                    self.instruction(Instruction::Binary(
+                        BinaryOperator::Subtract,
+                        left.clone(),
+                        Value::Int(1),
+                        left.clone(),
+                    ));
+                    ret_dest
                 }
                 Token::LogicalAnd => {
                     self.next_token()?;
@@ -221,6 +278,27 @@ impl Parser {
                     self.instruction(Instruction::Label(label_end.clone()));
                     dest
                 }
+                Token::QuestionMark => {
+                    self.next_token()?;
+                    let true_label = self.make_label();
+                    let false_label = self.make_label();
+                    let result = Value::Variable(self.make_temporary());
+                    let condition = left;
+                    self.instruction(Instruction::JumpIfZero(condition, false_label.clone()));
+
+                    //true
+                    let true_exp = self.do_expression(0)?;
+                    self.instruction(Instruction::Copy(true_exp, result.clone()));
+                    self.instruction(Instruction::Jump(true_label.clone()));
+
+                    // false
+                    self.instruction(Instruction::Label(false_label.clone()));
+                    self.expect(Token::Colon)?;
+                    let false_exp = self.do_expression(Self::precedence(&token))?;
+                    self.instruction(Instruction::Copy(false_exp, result.clone()));
+                    self.instruction(Instruction::Label(true_label.clone()));
+                    result
+                }
                 _ => {
                     let op = self.convert_binop()?;
                     let right = self.do_expression(Self::precedence(&token) + 1)?;
@@ -238,13 +316,17 @@ impl Parser {
 
     fn do_factor(&mut self) -> Result<Value> {
         let token = self.next_token()?;
+        println!("factor {:?}", token);
         match token {
             Token::Constant(val) => {
                 println!("val: {}", val);
                 Ok(Value::Int(val))
-            }
+            } // prefix ++ and --
             Token::PlusPlus => {
                 let source = self.do_factor()?;
+                if !self.is_lvalue(&source) {
+                    bail!("not lvalue");
+                }
                 let dest_name = self.make_temporary();
                 let ret_dest = Value::Variable(dest_name.clone());
                 self.instruction(Instruction::Binary(
@@ -258,6 +340,9 @@ impl Parser {
             }
             Token::MinusMinus => {
                 let source = self.do_factor()?;
+                if !self.is_lvalue(&source) {
+                    bail!("not lvalue");
+                }
                 let dest_name = self.make_temporary();
                 let ret_dest = Value::Variable(dest_name.clone());
                 self.instruction(Instruction::Binary(
@@ -304,45 +389,12 @@ impl Parser {
                 self.tacky.add_instruction(unop);
                 Ok(ret_dest)
             }
+
             Token::Identifier(name) => {
                 if self.variables.contains_key(&name) {
                     let var = self.variables.get(&name).unwrap().clone();
-                    let peek = self.peek()?;
-                    if peek == Token::PlusPlus {
-                        self.next_token()?;
-                        let dest_name = self.make_temporary();
-                        let ret_dest = Value::Variable(dest_name.clone());
-                        self.instruction(Instruction::Copy(
-                            Value::Variable(var.clone()),
-                            ret_dest.clone(),
-                        ));
-                        self.instruction(Instruction::Binary(
-                            BinaryOperator::Add,
-                            Value::Int(1),
-                            ret_dest.clone(),
-                            Value::Variable(var.clone()),
-                        ));
 
-                        Ok(ret_dest)
-                    } else if peek == Token::MinusMinus {
-                        self.next_token()?;
-                        let dest_name = self.make_temporary();
-                        let ret_dest = Value::Variable(dest_name.clone());
-                        self.instruction(Instruction::Copy(
-                            Value::Variable(var.clone()),
-                            ret_dest.clone(),
-                        ));
-                        self.instruction(Instruction::Binary(
-                            BinaryOperator::Subtract,
-                            ret_dest.clone(),
-                            Value::Int(1),
-                            Value::Variable(var.clone()),
-                        ));
-
-                        Ok(ret_dest)
-                    } else {
-                        Ok(Value::Variable(var.clone()))
-                    }
+                    Ok(Value::Variable(var.clone()))
                 } else {
                     bail!("Variable {} not declared", name);
                 }
@@ -351,6 +403,12 @@ impl Parser {
                 //println!("huh? {:?}", token);
                 panic!("huh? {:?}", token);
             }
+        }
+    }
+    fn is_lvalue(&self, value: &Value) -> bool {
+        match value {
+            Value::Variable(var) => self.variables.values().any(|v| v == var),
+            _ => false,
         }
     }
     fn expect(&mut self, token: Token) -> Result<Token> {
@@ -463,6 +521,8 @@ impl Parser {
             Token::BitwiseOr => 23,
             Token::LogicalAnd => 22,
             Token::LogicalOr => 21,
+
+            Token::QuestionMark => 11,
 
             Token::Equals => 10,
             Token::AndEquals => 10,

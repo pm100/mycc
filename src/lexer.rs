@@ -5,6 +5,7 @@ pub struct Lexer {
     current_line: String,
     current_pos: usize,
     current_line_number: usize,
+    chars: Vec<char>,
 }
 #[derive(Debug, PartialEq, Clone)]
 pub enum Token {
@@ -15,6 +16,8 @@ pub enum Token {
     RightBrace,
     SemiColon,
     Equals,
+    QuestionMark,
+    Colon,
 
     // basics
     Identifier(String),
@@ -62,6 +65,8 @@ pub enum Token {
     Int,
     Void,
     Return,
+    If,
+    Else,
 
     // special
     Eof,
@@ -74,6 +79,7 @@ impl Lexer {
             current_line: String::new(),
             current_pos: 0,
             current_line_number: 0,
+            chars: Vec::new(),
         }
     }
 
@@ -86,8 +92,10 @@ impl Lexer {
                     None => return Ok(Token::Eof),
                 }
                 self.current_line = self.current_line.trim().to_string();
+                println!("{}: {}", self.current_line_number, self.current_line);
                 self.current_pos = 0;
                 self.current_line_number += 1;
+                self.chars = self.current_line.chars().collect();
                 // blank lines
                 if self.at_end() {
                     continue;
@@ -101,6 +109,8 @@ impl Lexer {
                 '{' => Token::LeftBrace,
                 '}' => Token::RightBrace,
                 ';' => Token::SemiColon,
+                '?' => Token::QuestionMark,
+                ':' => Token::Colon,
 
                 '/' => {
                     if self.match_next('/') {
@@ -267,6 +277,8 @@ impl Lexer {
             "int" => Token::Int,
             "void" => Token::Void,
             "return" => Token::Return,
+            "if" => Token::If,
+            "else" => Token::Else,
             _ => Token::Identifier(s.to_string()),
         }
     }
@@ -278,22 +290,21 @@ impl Lexer {
         Token::Constant(self.current_line[start..self.current_pos].parse().unwrap())
     }
     fn advance(&mut self) -> char {
-        // horifically inefficient!
-        let c = self.current_line.chars().nth(self.current_pos);
+        let c = self.chars[self.current_pos];
         self.current_pos += 1;
-        c.unwrap()
+        c
     }
     fn peek(&self) -> char {
         if self.at_end() {
             return '\0';
         }
-        self.current_line.chars().nth(self.current_pos).unwrap()
+        self.chars[self.current_pos]
     }
     fn match_next(&mut self, c: char) -> bool {
         if self.at_end() {
             return false;
         }
-        if self.current_line.chars().nth(self.current_pos).unwrap() != c {
+        if self.chars[self.current_pos] != c {
             return false;
         }
         self.current_pos += 1;
