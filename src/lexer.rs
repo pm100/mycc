@@ -67,6 +67,7 @@ pub enum Token {
     Return,
     If,
     Else,
+    GoTo,
 
     // special
     Eof,
@@ -279,6 +280,8 @@ impl Lexer {
             "return" => Token::Return,
             "if" => Token::If,
             "else" => Token::Else,
+            "goto" => Token::GoTo,
+
             _ => Token::Identifier(s.to_string()),
         }
     }

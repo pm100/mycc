@@ -1,5 +1,9 @@
 use anyhow::{bail, Result};
-use std::{collections::HashMap, mem::discriminant, path::Path};
+use std::{
+    collections::{HashMap, VecDeque},
+    mem::discriminant,
+    path::Path,
+};
 
 // https://users.rust-lang.org/t/how-to-parameterize-a-function-or-macro-by-enum-variant/126398
 macro_rules! expect {
@@ -22,8 +26,11 @@ pub struct Parser {
     tacky: TackyProgram,
     next_temporary: usize,
     eof_hit: bool,
-    peeked_token: Option<Token>,
+    peeked_tokens: VecDeque<Token>,
     variables: HashMap<String, String>,
+    labels: HashMap<String, String>,
+    next_name: usize,
+    nest: String,
 }
 
 impl Parser {
@@ -33,8 +40,11 @@ impl Parser {
             tacky: TackyProgram::new(),
             next_temporary: 0,
             eof_hit: false,
-            peeked_token: None,
+            peeked_tokens: VecDeque::new(),
             variables: HashMap::new(),
+            labels: HashMap::new(),
+            next_name: 0,
+            nest: String::new(),
         }
     }
 
@@ -71,12 +81,12 @@ impl Parser {
             self.do_block_item()?;
         }
         self.next_token()?;
-        self.tacky
-            .add_instruction(Instruction::Return(Value::Int(0)));
+        self.instruction(Instruction::Return(Value::Int(0)));
         Ok(())
     }
     fn do_block_item(&mut self) -> Result<()> {
         let token = self.peek()?;
+        self.nest.clear();
         match token {
             Token::Int => self.do_declaration()?,
             _ => self.do_statement()?,
@@ -104,14 +114,13 @@ impl Parser {
         if let Some(var) = self.variables.get(name) {
             panic!("Variable {} already declared", var);
         }
-        let new_name = self.make_temporary();
+        let new_name = self.make_newname(name);
         println!("new_name: {}=>{}", name, new_name);
         self.variables
             .insert(name.to_string(), new_name.to_string());
         if init {
             let val = self.do_expression(0)?;
-            self.tacky
-                .add_instruction(Instruction::Copy(val, Value::Variable(new_name)));
+            self.instruction(Instruction::Copy(val, Value::Variable(new_name)));
         }
         Ok(())
     }
@@ -125,22 +134,46 @@ impl Parser {
             Token::If => {
                 self.do_if()?;
             }
+            Token::GoTo => {
+                self.do_goto()?;
+            }
             Token::SemiColon => {
                 self.next_token()?;
             }
             _ => {
-                self.do_expression(0)?;
-                self.expect(Token::SemiColon)?;
+                if matches!(token, Token::Identifier(_)) && self.peek_n(1)? == Token::Colon {
+                    self.do_label()?;
+                    self.do_statement()?;
+                } else {
+                    self.do_expression(0)?;
+                    self.expect(Token::SemiColon)?;
+                }
             }
         };
 
         Ok(())
     }
-
+    fn do_goto(&mut self) -> Result<()> {
+        self.next_token()?;
+        let label = format!("__{}__", expect!(self, Token::Identifier));
+        if let Some(_) = self.labels.get(&label) {
+        } else {
+            self.labels.insert(label.clone(), label.clone());
+        }
+        self.instruction(Instruction::Jump(label));
+        self.expect(Token::SemiColon)?;
+        Ok(())
+    }
     fn do_return(&mut self) -> Result<()> {
         self.next_token()?;
         let val = self.do_expression(0)?;
-        self.tacky.add_instruction(Instruction::Return(val));
+        self.instruction(Instruction::Return(val));
+        Ok(())
+    }
+    fn do_label(&mut self) -> Result<()> {
+        let label = format!("__{}__", expect!(self, Token::Identifier));
+        self.expect(Token::Colon)?;
+        self.instruction(Instruction::Label(label));
         Ok(())
     }
     fn do_if(&mut self) -> Result<()> {
@@ -162,9 +195,20 @@ impl Parser {
         Ok(())
     }
     fn do_expression(&mut self, min_prec: i32) -> Result<Value> {
+        println!("{}do_expression {}", self.nest, min_prec);
         let mut left = self.do_factor()?;
-        println!("expleft: {:?}", left);
         let mut token = self.peek()?;
+
+        println!(
+            "{}expleft: {:?} {:?} {}",
+            self.nest,
+            left,
+            token,
+            Self::precedence(&token)
+        );
+        self.nest.push(' ');
+        self.nest.push(' ');
+        // let mut token = self.peek()?;
         loop {
             if Self::precedence(&token) < min_prec {
                 break;
@@ -196,7 +240,7 @@ impl Parser {
                         let right = self.do_expression(Self::precedence(&token))?;
                         if token == Token::Equals {
                             let inst = Instruction::Copy(right.clone(), left.clone());
-                            self.tacky.add_instruction(inst);
+                            self.instruction(inst);
                             right
                         } else {
                             let op = Self::convert_compound(&token)?;
@@ -224,10 +268,11 @@ impl Parser {
                     self.instruction(Instruction::Copy(left.clone(), ret_dest.clone()));
                     self.instruction(Instruction::Binary(
                         BinaryOperator::Add,
+                        left.clone(),
                         Value::Int(1),
                         left.clone(),
-                        left.clone(),
                     ));
+                    //self.instruction(Instruction::Copy(ret_dest.clone(), left));
                     ret_dest
                 }
                 Token::MinusMinus => {
@@ -244,6 +289,7 @@ impl Parser {
                         Value::Int(1),
                         left.clone(),
                     ));
+                    //self.instruction(Instruction::Copy(ret_dest.clone(), left));
                     ret_dest
                 }
                 Token::LogicalAnd => {
@@ -304,19 +350,21 @@ impl Parser {
                     let right = self.do_expression(Self::precedence(&token) + 1)?;
                     let dest = Value::Variable(self.make_temporary());
                     let inst = Instruction::Binary(op, left, right, dest.clone());
-                    self.tacky.add_instruction(inst);
+                    self.instruction(inst);
                     dest
                 }
             };
             left = dest;
             token = self.peek()?;
         }
+        self.nest.pop();
+        self.nest.pop();
         Ok(left)
     }
 
     fn do_factor(&mut self) -> Result<Value> {
         let token = self.next_token()?;
-        println!("factor {:?}", token);
+        println!("{}factor {:?}", self.nest, token);
         match token {
             Token::Constant(val) => {
                 println!("val: {}", val);
@@ -360,7 +408,7 @@ impl Parser {
                 let ret_dest = Value::Variable(dest_name.clone());
                 let unop =
                     Instruction::Unary(UnaryOperator::Negate, source, Value::Variable(dest_name));
-                self.tacky.add_instruction(unop);
+                self.instruction(unop);
                 Ok(ret_dest)
             }
 
@@ -373,7 +421,7 @@ impl Parser {
                     source,
                     Value::Variable(dest_name),
                 );
-                self.tacky.add_instruction(unop);
+                self.instruction(unop);
                 Ok(ret_dest)
             }
             Token::LeftParen => {
@@ -386,7 +434,7 @@ impl Parser {
                 let dest_name = self.make_temporary();
                 let ret_dest = Value::Variable(dest_name.clone());
                 let unop = Instruction::Unary(UnaryOperator::LogicalNot, source, ret_dest.clone());
-                self.tacky.add_instruction(unop);
+                self.instruction(unop);
                 Ok(ret_dest)
             }
 
@@ -423,6 +471,12 @@ impl Parser {
     fn make_temporary(&mut self) -> String {
         let temp = format!("temp.{}", self.next_temporary);
         self.next_temporary += 1;
+        temp
+    }
+
+    fn make_newname(&mut self, name: &str) -> String {
+        let temp = format!("{}{}", name, self.next_name);
+        self.next_name += 1;
         temp
     }
     fn make_label(&mut self) -> String {
@@ -470,13 +524,15 @@ impl Parser {
         }
     }
     fn instruction(&mut self, instruction: Instruction) {
+        println!("{}instruction {:?}", self.nest, instruction);
         self.tacky.add_instruction(instruction);
     }
     fn next_token(&mut self) -> Result<Token> {
-        if let Some(peeked) = self.peeked_token.take() {
-            return Ok(peeked);
-        }
-        let token = self.lexer.next_token()?;
+        let token = if self.peeked_tokens.len() > 0 {
+            self.peeked_tokens.pop_front().unwrap()
+        } else {
+            self.lexer.next_token()?
+        };
         if token == Token::Eof {
             self.eof_hit = true;
         }
@@ -484,13 +540,17 @@ impl Parser {
     }
 
     fn peek(&mut self) -> Result<Token> {
-        if let Some(peeked) = self.peeked_token.as_ref() {
-            Ok(peeked.clone())
-        } else {
-            let next = self.next_token()?;
-            self.peeked_token = Some(next.clone());
-            Ok(next)
+        self.peek_n(0)
+    }
+
+    fn peek_n(&mut self, n: usize) -> Result<Token> {
+        if n >= self.peeked_tokens.len() {
+            for _ in 0..n + 1 {
+                let token = self.lexer.next_token()?;
+                self.peeked_tokens.push_back(token.clone());
+            }
         }
+        return Ok(self.peeked_tokens[n].clone());
     }
 
     fn precedence(token: &Token) -> i32 {
