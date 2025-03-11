@@ -59,10 +59,15 @@ fn main() -> ExitCode {
     }
 
     if cli.parse || cli.validate {
-        if parse(&preproc_output).is_ok() {
-            return ExitCode::SUCCESS;
-        };
-        return ExitCode::FAILURE;
+        match parse(&preproc_output) {
+            Ok(()) => {
+                return ExitCode::SUCCESS;
+            }
+            Err(e) => {
+                eprintln!("build error {:?}", e);
+                return ExitCode::FAILURE;
+            }
+        }
     }
 
     if cli.codegen {
