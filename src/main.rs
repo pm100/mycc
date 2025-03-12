@@ -1,5 +1,6 @@
 pub mod codegen;
 pub mod cpp;
+pub mod expr;
 pub mod lexer;
 pub mod moira;
 pub mod parser;
