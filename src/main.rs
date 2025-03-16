@@ -5,6 +5,7 @@ pub mod lexer;
 pub mod moira;
 pub mod parser;
 pub mod tacky;
+
 pub mod x64 {
     pub mod moira_inst;
     pub mod moiragen;

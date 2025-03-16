@@ -73,6 +73,9 @@ pub enum Token {
     For,
     Break,
     Continue,
+    Case,
+    Default,
+    Switch,
 
     // special
     Eof,
@@ -291,6 +294,9 @@ impl Lexer {
             "for" => Token::For,
             "break" => Token::Break,
             "continue" => Token::Continue,
+            "case" => Token::Case,
+            "default" => Token::Default,
+            "switch" => Token::Switch,
 
             _ => Token::Identifier(s.to_string()),
         }

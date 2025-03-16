@@ -10,13 +10,13 @@ impl Parser {
         let mut left = self.do_factor()?;
         let mut token = self.peek()?;
 
-        // println!(
-        //     "{}expleft: {:?} {:?} {}",
-        //     self.nest,
-        //     left,
-        //     token,
-        //     Self::precedence(&token)
-        // );
+        println!(
+            "{}expleft: {:?} {:?} {}",
+            self.nest,
+            left,
+            token,
+            Self::precedence(&token)
+        );
         self.nest.push(' ');
         self.nest.push(' ');
         // let mut token = self.peek()?;
@@ -55,13 +55,15 @@ impl Parser {
                             right
                         } else {
                             let op = Self::convert_compound(&token)?;
-                            let dest = Value::Variable(self.make_temporary());
                             self.instruction(Instruction::Binary(
                                 op,
                                 left.clone(),
                                 right.clone(),
                                 left.clone(),
                             ));
+                            // HACK
+                            // we need to make sure the the result is *not* an lvalue
+                            let dest = Value::Variable(self.make_temporary());
                             self.instruction(Instruction::Copy(left.clone(), dest.clone()));
                             dest
                         }
@@ -105,8 +107,8 @@ impl Parser {
                 }
                 Token::LogicalAnd => {
                     self.next_token()?;
-                    let label_false = self.make_label();
-                    let label_end = self.make_label();
+                    let label_false = self.make_label("and_false");
+                    let label_end = self.make_label("and_end");
                     self.instruction(Instruction::JumpIfZero(left, label_false.clone()));
                     let right = self.do_expression(Self::precedence(&token) + 1)?;
                     self.instruction(Instruction::JumpIfZero(right, label_false.clone()));
@@ -121,8 +123,8 @@ impl Parser {
                 }
                 Token::LogicalOr => {
                     self.next_token()?;
-                    let label_true = self.make_label();
-                    let label_end = self.make_label();
+                    let label_true = self.make_label("or_true");
+                    let label_end = self.make_label("or_end");
                     self.instruction(Instruction::JumpIfNotZero(left, label_true.clone()));
                     let right = self.do_expression(Self::precedence(&token) + 1)?;
                     self.instruction(Instruction::JumpIfNotZero(right, label_true.clone()));
@@ -137,8 +139,8 @@ impl Parser {
                 }
                 Token::QuestionMark => {
                     self.next_token()?;
-                    let true_label = self.make_label();
-                    let false_label = self.make_label();
+                    let true_label = self.make_label("ternary_true");
+                    let false_label = self.make_label("ternary_false");
                     let result = Value::Variable(self.make_temporary());
                     let condition = left;
                     self.instruction(Instruction::JumpIfZero(condition, false_label.clone()));
@@ -175,7 +177,7 @@ impl Parser {
 
     fn do_factor(&mut self) -> Result<Value> {
         let token = self.next_token()?;
-        //  println!("{}factor {:?}", self.nest, token);
+        println!("{}factor {:?}", self.nest, token);
         match token {
             Token::Constant(val) => {
                 println!("val: {}", val);
@@ -308,6 +310,45 @@ impl Parser {
             Token::RemainderEquals => 10,
 
             _ => -1, // indicates this is not a binop
+        }
+    }
+    fn convert_binop(&mut self) -> Result<BinaryOperator> {
+        let token = self.next_token()?;
+        match token {
+            Token::Add => Ok(BinaryOperator::Add),
+            Token::Negate => Ok(BinaryOperator::Subtract),
+            Token::Multiply => Ok(BinaryOperator::Multiply),
+            Token::Divide => Ok(BinaryOperator::Divide),
+            Token::Remainder => Ok(BinaryOperator::Remainder),
+            Token::BitwiseAnd => Ok(BinaryOperator::BitAnd),
+            Token::BitwiseOr => Ok(BinaryOperator::BitOr),
+            Token::BitwiseXor => Ok(BinaryOperator::BitXor),
+            Token::ShiftLeft => Ok(BinaryOperator::ShiftLeft),
+            Token::ShiftRight => Ok(BinaryOperator::ShiftRight),
+            Token::IsEqual => Ok(BinaryOperator::Equal),
+            Token::IsNotEqual => Ok(BinaryOperator::NotEqual),
+            Token::LessThan => Ok(BinaryOperator::LessThan),
+            Token::LessThanOrEqual => Ok(BinaryOperator::LessThanOrEqual),
+            Token::GreaterThan => Ok(BinaryOperator::GreaterThan),
+            Token::GreaterThanOrEqual => Ok(BinaryOperator::GreaterThanOrEqual),
+
+            _ => bail!("Expected binop, got {:?}", token),
+        }
+    }
+    fn convert_compound(token: &Token) -> Result<BinaryOperator> {
+        match token {
+            //  Token::Equals => Ok(BinaryOperator::Equal),
+            Token::AndEquals => Ok(BinaryOperator::BitAnd),
+            Token::MinusEquals => Ok(BinaryOperator::Subtract),
+            Token::DivideEquals => Ok(BinaryOperator::Divide),
+            Token::MultiplyEquals => Ok(BinaryOperator::Multiply),
+            Token::XorEquals => Ok(BinaryOperator::BitXor),
+            Token::OrEquals => Ok(BinaryOperator::BitOr),
+            Token::PlusEquals => Ok(BinaryOperator::Add),
+            Token::ShiftLeftEquals => Ok(BinaryOperator::ShiftLeft),
+            Token::ShiftRightEquals => Ok(BinaryOperator::ShiftRight),
+            Token::RemainderEquals => Ok(BinaryOperator::Remainder),
+            _ => bail!("Expected compound, got {:?}", token),
         }
     }
 }

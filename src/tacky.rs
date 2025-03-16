@@ -40,7 +40,7 @@ pub enum BinaryOperator {
     GreaterThan,
     GreaterThanOrEqual,
 }
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 
 pub enum Value {
     Int(i32),
@@ -88,25 +88,25 @@ impl TackyProgram {
             for instruction in &function.instructions {
                 match instruction {
                     Instruction::Return(val) => {
-                        println!("  Return {:?}", val);
+                        println!("      Return {:?}", val);
                     }
                     Instruction::Unary(op, src, dest) => {
-                        println!("  Unary {:?} {:?} {:?}", op, src, dest);
+                        println!("      Unary {:?} {:?} {:?}", op, src, dest);
                     }
                     Instruction::Binary(op, src1, src2, dest) => {
-                        println!("  Binary {:?} {:?} {:?} {:?}", op, src1, src2, dest);
+                        println!("      Binary {:?} {:?} {:?} {:?}", op, src1, src2, dest);
                     }
                     Instruction::Copy(src, dest) => {
-                        println!("  Copy {:?} {:?}", src, dest);
+                        println!("      Copy {:?} {:?}", src, dest);
                     }
                     Instruction::Jump(label) => {
-                        println!("  Jump {:?}", label);
+                        println!("      Jump {:?}", label);
                     }
                     Instruction::JumpIfZero(val, label) => {
-                        println!("  JumpIfZero {:?} {:?}", val, label);
+                        println!("      JumpIfZero {:?} {:?}", val, label);
                     }
                     Instruction::JumpIfNotZero(val, label) => {
-                        println!("  JumpIfNotZero {:?} {:?}", val, label);
+                        println!("      JumpIfNotZero {:?} {:?}", val, label);
                     }
                     Instruction::Label(label) => {
                         println!("  Label {:?}", label);
