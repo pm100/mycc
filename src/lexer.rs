@@ -18,6 +18,7 @@ pub enum Token {
     Equals,
     QuestionMark,
     Colon,
+    Comma,
 
     // basics
     Identifier(String),
@@ -120,6 +121,7 @@ impl Lexer {
                 ';' => Token::SemiColon,
                 '?' => Token::QuestionMark,
                 ':' => Token::Colon,
+                ',' => Token::Comma,
 
                 '/' => {
                     if self.match_next('/') {

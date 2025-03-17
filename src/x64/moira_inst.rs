@@ -11,6 +11,7 @@ pub enum Instruction {
     JmpCC(CondCode, String),
     SetCC(CondCode, Operand),
     Label(String),
+    Call(String, Vec<Operand>, Operand),
     AllocateStack(i32),
 }
 #[derive(Debug, Clone)]

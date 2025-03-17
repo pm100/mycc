@@ -89,6 +89,12 @@ impl X64MoiraGenerator {
                 self.moira
                     .add_instruction(Instruction::Label(label.clone()));
             }
+            tacky::Instruction::FunCall(name, args, dest) => {
+                let dest = self.get_value(dest);
+
+                //    self.moira
+                //   .add_instruction(Instruction::Call(name.clone(), args.clone(), dest));
+            }
         }
         Ok(())
     }

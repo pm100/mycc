@@ -1,4 +1,6 @@
 use anyhow::{bail, Result};
+use backtrace::{Backtrace, BacktraceFrame, BacktraceSymbol};
+use enum_as_inner::EnumAsInner;
 use std::{
     collections::{HashMap, VecDeque},
     mem::discriminant,
@@ -6,24 +8,58 @@ use std::{
 };
 
 // https://users.rust-lang.org/t/how-to-parameterize-a-function-or-macro-by-enum-variant/126398
+
 macro_rules! expect {
     ($lexer:expr,$token:path) => {
         match $lexer.next_token() {
             Ok($token(data)) => data,
             Err(e) => return Err(e),
-            _ => bail!("Expected {:?}, got {:?}", stringify!(token), "x"),
+            t => bail!("Expected {e:?}, got {t:?}", e = stringify!($token)),
         }
     };
 }
 
 use crate::{
     lexer::{Lexer, Token},
-    tacky::{BinaryOperator, Instruction, TackyProgram, UnaryOperator, Value},
+    tacky::{BinaryOperator, Instruction, TackyProgram, Value},
 };
 #[derive(Debug, Clone)]
 pub(crate) struct VariableName {
     pub(crate) name: String,
     pub(crate) is_current: bool,
+}
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum SymbolType {
+    Int,
+    Void,
+}
+// pub(crate) struct ArgumentDescriptor {
+//     pub(crate) name: String,
+//     pub(crate) tipe: SymbolType,
+// }
+#[derive(Debug, Clone, PartialEq, EnumAsInner)]
+pub(crate) enum SymbolDetails {
+    Function {
+        return_type: SymbolType,
+        args: Vec<SymbolType>,
+    },
+    //
+    Variable {
+        rename: String,
+        stype: SymbolType,
+    },
+}
+#[derive(Debug, Clone, PartialEq)]
+pub enum SymbolState {
+    Defined,
+    Declared,
+    Tentative,
+}
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Symbol {
+    pub(crate) name: String,
+    pub(crate) state: SymbolState,
+    pub(crate) details: SymbolDetails,
 }
 
 struct SwitchContext {
@@ -31,7 +67,7 @@ struct SwitchContext {
     value: Value,
     before_first_case: bool,
     default_statement_seen: bool,
-    end_label: String,
+
     next_case_label: String,
     next_drop_thru_label: String,
 }
@@ -41,12 +77,14 @@ pub struct Parser {
     next_temporary: usize,
     eof_hit: bool,
     peeked_tokens: VecDeque<Token>,
+    // original name => new name
     variables: Vec<HashMap<String, VariableName>>,
     labels: HashMap<String, String>,
     next_name: usize,
     continue_label_stack: Vec<String>,
     switch_context_stack: Vec<SwitchContext>,
     break_label_stack: Vec<String>,
+    pub(crate) symbol_stack: Vec<HashMap<String, Symbol>>,
     pub(crate) nest: String,
 }
 
@@ -65,6 +103,7 @@ impl Parser {
             continue_label_stack: Vec::new(),
             switch_context_stack: Vec::new(),
             break_label_stack: Vec::new(),
+            symbol_stack: vec![HashMap::new()],
         }
     }
 
@@ -78,27 +117,179 @@ impl Parser {
             if self.peek()? == Token::Eof {
                 break;
             }
-            self.do_function()?;
+            self.do_function(true)?;
         }
         Ok(())
     }
-    fn do_function(&mut self) -> Result<()> {
+    fn do_function(&mut self, body_allowed: bool) -> Result<()> {
         self.expect(Token::Int)?;
 
         let function_name = expect!(self, Token::Identifier);
+
         println!("Function: {}", function_name);
-        self.tacky.add_function(&function_name);
+        // self.tacky.add_function(&function_name);
+
+        let mut symbol_det = SymbolDetails::Function {
+            // name: function_name.clone(),
+            return_type: SymbolType::Int, // always at the moment
+            args: Vec::new(),
+        };
+        let mut arg_types = &mut symbol_det.as_function_mut().unwrap().1;
         self.expect(Token::LeftParen)?;
-        self.expect(Token::Void)?;
-        self.expect(Token::RightParen)?;
+
+        let mut arg_names = Vec::new();
+        //let mut arg_types = Vec::new();
+
+        loop {
+            let token = self.next_token()?;
+            if token == Token::RightParen {
+                // self.next_token()?;
+                break;
+            }
+            // let SymbolDetails::Function {
+            //     return_type: _,
+            //     ref mut args,
+            // } = symbol_det;
+
+            match token {
+                Token::Int => {
+                    arg_types.push(SymbolType::Int);
+                }
+                Token::Void => {
+                    self.expect(Token::RightParen)?;
+                    break;
+                }
+                _ => bail!("Expected Int or Void, got {:?}", token),
+            }
+
+            let token = self.peek()?;
+            if let Token::Identifier(name) = token {
+                if arg_names.contains(&name) {
+                    bail!("Duplicate argument name {}", name);
+                }
+                arg_names.push(name);
+                self.next_token()?;
+            }
+            let token = self.next_token()?;
+            match token {
+                Token::RightParen => {
+                    break;
+                }
+                Token::Comma => {
+                    if self.peek()? == Token::RightParen {
+                        bail!("redundant comma in function declaration");
+                    }
+                    continue;
+                }
+                _ => {
+                    bail!("Expected Comma or RightParen, got {:?}", token);
+                }
+            }
+        }
+        let token = self.peek()?;
+
+        let definition = if token == Token::SemiColon {
+            self.next_token()?;
+            false
+        } else {
+            true
+        };
+        // have we already seen this function before
+        let new_func = if let Some((ref mut found, top)) = self.lookup_symbol(&function_name) {
+            match &found.details {
+                SymbolDetails::Function { return_type, args } => {
+                    // we know this function already exists, so check the args and return type
+                    if *return_type != SymbolType::Int {
+                        bail!(
+                            "Function {} already declared with different return type",
+                            function_name
+                        );
+                    }
+                    if args != *arg_types {
+                        bail!(
+                            "Function {} already declared with different args",
+                            function_name
+                        );
+                    }
+                    if found.state == SymbolState::Defined {
+                        bail!("Function {} already defined", function_name);
+                    };
+                    if definition {
+                        found.state = SymbolState::Defined;
+                    } else {
+                        found.state = SymbolState::Declared;
+                    }
+                    false
+                }
+                _ => {
+                    if top {
+                        bail!("duplicated name in same scope");
+                    } else {
+                        true
+                    }
+                }
+            }
+        } else {
+            true
+        };
+        let symbol = Symbol {
+            name: function_name.clone(),
+            state: if definition {
+                SymbolState::Defined
+            } else {
+                SymbolState::Declared
+            },
+            details: symbol_det.clone(),
+        };
+        if new_func {
+            // new function, so add it to the symbol table
+
+            self.insert_global_symbol(&function_name, symbol.clone());
+        }
+        // if its a declaration we are done
+
+        if !definition {
+            match self.lookup_symbol(&function_name) {
+                Some((_, true)) => {}
+                _ => {
+                    self.insert_symbol(&function_name, symbol);
+                }
+            }
+            return Ok(());
+        }
+        if !body_allowed {
+            bail!("Function {} definition not allowed here", function_name);
+        }
+        self.tacky.add_function(&function_name);
+        self.variables.clear();
+        self.variables.push(HashMap::new());
+        self.push_symbols();
+        for arg in arg_names {
+            let new_name = self.make_newname(&arg);
+            self.variables().insert(
+                arg.clone(),
+                VariableName {
+                    name: new_name.clone(),
+                    is_current: true,
+                },
+            );
+            let symbol = Symbol {
+                name: arg.clone(),
+                state: SymbolState::Defined,
+                details: SymbolDetails::Variable {
+                    rename: new_name.to_string(),
+                    stype: SymbolType::Int,
+                },
+            };
+            self.insert_symbol(&arg, symbol);
+        }
         self.do_function_body()?;
         Ok(())
     }
 
     fn do_function_body(&mut self) -> Result<()> {
-        //  self.expect(Token::LeftBrace)?;
-        self.variables.clear();
-        self.variables.push(HashMap::new());
+        // self.expect(Token::LeftBrace)?;
+
         self.do_block()?;
         self.instruction(Instruction::Return(Value::Int(0)));
         Ok(())
@@ -110,6 +301,7 @@ impl Parser {
             self.do_block_item()?;
         }
         self.variables.pop();
+        self.pop_symbols();
         self.expect(Token::RightBrace)?;
         //  self.next_token()?;
         Ok(())
@@ -118,12 +310,18 @@ impl Parser {
         let token = self.peek()?;
         self.nest.clear();
         match token {
-            Token::Int => self.do_declaration()?,
+            Token::Int => self.do_declaration(true)?,
             _ => self.do_statement()?,
         }
         Ok(())
     }
-    fn do_declaration(&mut self) -> Result<()> {
+    fn do_declaration(&mut self, allows_func: bool) -> Result<()> {
+        if self.peek_n(2)? == Token::LeftParen {
+            if !allows_func {
+                bail!("Function declaration not allowed here");
+            }
+            return self.do_function(false);
+        }
         self.next_token()?;
 
         let name = expect!(self, Token::Identifier);
@@ -146,6 +344,14 @@ impl Parser {
                 bail!("Variable {} already declared", name);
             }
         }
+
+        let sym_look = self.lookup_symbol(name);
+        if let Some((symbol, true)) = sym_look {
+            if symbol.details.is_function() {
+                bail!("Variable {} already declared as function", name);
+            }
+            //bail!("Variable {} already declared", name);
+        }
         let new_name = self.make_newname(name);
         self.variables().insert(
             name.to_string(),
@@ -154,6 +360,15 @@ impl Parser {
                 is_current: true,
             },
         );
+        let symbol = Symbol {
+            name: name.to_string(),
+            state: SymbolState::Defined,
+            details: SymbolDetails::Variable {
+                rename: new_name.to_string(),
+                stype: SymbolType::Int,
+            },
+        };
+        self.insert_symbol(&name, symbol);
         if init {
             let val = self.do_expression(0)?;
             self.instruction(Instruction::Copy(val, Value::Variable(new_name)));
@@ -182,6 +397,7 @@ impl Parser {
 
             Token::LeftBrace => {
                 self.push_new_varmap();
+                self.push_symbols();
                 self.do_block()?;
             }
             _ => {
@@ -216,7 +432,7 @@ impl Parser {
         match token {
             Token::Int => {
                 // eats the semi colon
-                self.do_declaration()?;
+                self.do_declaration(false)?;
             }
             Token::SemiColon => {
                 self.next_token()?;
@@ -393,7 +609,7 @@ impl Parser {
             value: value,
             default_statement_seen: false,
             before_first_case: true,
-            end_label: label_end.clone(),
+
             // bootstrap the label chain
             next_drop_thru_label: next_drop_thru_label.clone(),
             next_case_label: next_case_label.clone(),
@@ -552,11 +768,15 @@ impl Parser {
         if token == Token::Eof {
             self.eof_hit = true;
         }
+
+        let sym = Self::previous_symbol(6);
         println!(
-            "                  next_token {:?} peeks={} blocks={}",
+            "                  {:?}:{:?} next_token {:?} peeks={} blocks={}",
+            sym.as_ref().and_then(BacktraceSymbol::filename),
+            sym.as_ref().and_then(BacktraceSymbol::lineno),
             token,
             self.peeked_tokens.len(),
-            self.variables.len()
+            self.variables.len(),
         );
         Ok(token)
     }
@@ -579,7 +799,38 @@ impl Parser {
     pub(crate) fn peek(&mut self) -> Result<Token> {
         self.peek_n(0)
     }
+    pub(crate) fn lookup_symbol(&mut self, name: &str) -> Option<(Symbol, bool)> {
+        for i in (0..self.symbol_stack.len()).rev() {
+            if let Some(sym) = self.symbol_stack[i].get(name) {
+                return Some((sym.clone(), i == self.symbol_stack.len() - 1));
+            }
+        }
+        None
+    }
+    fn insert_global_symbol(&mut self, name: &str, symbol: Symbol) {
+        println!("insert_global_symbol {:?}", symbol);
+        debug_assert!(!self.symbol_stack[0].contains_key(name));
+        self.symbol_stack
+            .get_mut(0)
+            .unwrap()
+            .insert(name.to_string(), symbol);
+    }
+    fn insert_symbol(&mut self, name: &str, symbol: Symbol) {
+        println!("insert_symbol {:?}", symbol);
+        self.symbol_stack
+            .last_mut()
+            .unwrap()
+            .insert(name.to_string(), symbol);
+    }
 
+    fn pop_symbols(&mut self) {
+        println!("pop_symbols {:?}", self.symbol_stack.len());
+        self.symbol_stack.pop();
+    }
+    fn push_symbols(&mut self) {
+        println!("push_symbols {:?}", self.symbol_stack.len());
+        self.symbol_stack.push(HashMap::new());
+    }
     pub(crate) fn peek_n(&mut self, n: usize) -> Result<Token> {
         if n >= self.peeked_tokens.len() {
             for _ in 0..n + 1 {
@@ -589,4 +840,29 @@ impl Parser {
         }
         return Ok(self.peeked_tokens[n].clone());
     }
+    //https://www.reddit.com/r/rust/comments/6ojuxz/comment/dki11oe/?utm_source=share&utm_medium=web3x&utm_name=web3xcss&utm_term=1&utm_content=share_button
+    fn previous_symbol(level: u32) -> Option<BacktraceSymbol> {
+        let (trace, curr_file, curr_line) = (Backtrace::new(), file!(), line!());
+        let frames = trace.frames();
+        frames
+            .iter()
+            .flat_map(BacktraceFrame::symbols)
+            // .skip_while(|s| {
+            //     s.filename()
+            //         .map(|p| !p.ends_with(curr_file))
+            //         .unwrap_or(true)
+            //         || s.lineno() != Some(curr_line)
+            // })
+            .nth(1 + level as usize)
+            .cloned()
+    }
+
+    // fn foo() {
+    //     let sym = previous_symbol(1);
+    //     println!(
+    //         "called from {:?}:{:?}",
+    //         sym.as_ref().and_then(BacktraceSymbol::filename),
+    //         sym.as_ref().and_then(BacktraceSymbol::lineno)
+    //     );
+    // }
 }

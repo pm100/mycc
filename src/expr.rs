@@ -1,6 +1,6 @@
 use crate::{
     lexer::{Lexer, Token},
-    parser::Parser,
+    parser::{Parser, SymbolDetails},
     tacky::{BinaryOperator, Instruction, TackyProgram, UnaryOperator, Value},
 };
 use anyhow::{bail, Result};
@@ -252,17 +252,78 @@ impl Parser {
             }
 
             Token::Identifier(name) => {
-                if self.variables().contains_key(&name) {
-                    let var = self.variables().get(&name).unwrap().clone();
+                // is this a function call?
 
-                    Ok(Value::Variable(var.name.clone()))
+                let token = self.peek()?;
+                if token == Token::LeftParen {
+                    // yes it is
+
+                    // if let Some(found) = self.lookup_symbol(&name) {
+                    //     bail!("Expected function, got variable {:?}", name);
+                    // }
+                    let symargs = if let Some((symbol, _)) = self.lookup_symbol(&name) {
+                        if !matches!(symbol.details, SymbolDetails::Function { .. }) {
+                            bail!("Expected function, got {:?}", name);
+                        }
+                        let (_, args) = symbol.details.into_function().unwrap();
+                        args
+                    } else {
+                        bail!("Function {} not declared", name);
+                    };
+                    self.next_token()?;
+                    let mut args = Vec::new();
+                    let mut argidx = 0;
+                    loop {
+                        let token = self.peek()?;
+                        if token == Token::RightParen {
+                            self.next_token()?;
+                            break;
+                        }
+                        //    let _ = self.next_token()?;
+                        let arg = self.do_expression(0)?;
+                        argidx = argidx + 1;
+                        args.push(arg);
+                        let token = self.next_token()?;
+                        match token {
+                            Token::RightParen => {
+                                break;
+                            }
+                            Token::Comma => {
+                                if self.peek()? == Token::RightParen {
+                                    bail!("redeundant comma in function call");
+                                }
+                            }
+                            _ => {
+                                bail!("Expected ) or , got {:?}", token);
+                            }
+                        }
+                    }
+                    if argidx != symargs.len() {
+                        bail!(
+                            "Function {} expected {} arguments, got {}",
+                            name,
+                            symargs.len(),
+                            argidx
+                        );
+                    }
+                    // self.next_token()?;
+                    let dest_name = self.make_temporary();
+                    let ret_dest = Value::Variable(dest_name.clone());
+                    self.instruction(Instruction::FunCall(name, args, ret_dest.clone()));
+                    Ok(ret_dest)
                 } else {
-                    bail!("Variable {} not declared", name);
+                    if self.variables().contains_key(&name) {
+                        let var = self.variables().get(&name).unwrap().clone();
+
+                        Ok(Value::Variable(var.name.clone()))
+                    } else {
+                        bail!("Variable {} not declared", name);
+                    }
                 }
             }
             _ => {
                 //println!("huh? {:?}", token);
-                panic!("huh? {:?}", token);
+                bail!("huh? {:?}", token);
             }
         }
     }

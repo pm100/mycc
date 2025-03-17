@@ -54,10 +54,15 @@ fn main() -> ExitCode {
     println!("preprocessing {:?} => {:?}", &cli.source, &preproc_output);
     cpp::preprocess(&cli.source, &preproc_output).unwrap();
     if cli.lex {
-        if lex(&preproc_output).is_ok() {
-            return ExitCode::SUCCESS;
-        };
-        return ExitCode::FAILURE;
+        match lex(&preproc_output) {
+            Ok(()) => {
+                return ExitCode::SUCCESS;
+            }
+            Err(e) => {
+                eprintln!("build error {:?}", e);
+                return ExitCode::FAILURE;
+            }
+        }
     }
 
     if cli.parse || cli.validate {
@@ -91,7 +96,7 @@ fn main() -> ExitCode {
     ExitCode::FAILURE
 }
 
-fn lex(path: &Path) -> Result<bool> {
+fn lex(path: &Path) -> Result<()> {
     let mut lexer = lexer::Lexer::new(path);
     loop {
         let token = lexer.next_token()?;
@@ -100,7 +105,7 @@ fn lex(path: &Path) -> Result<bool> {
             break;
         }
     }
-    Ok(true)
+    Ok(())
 }
 
 fn parse(path: &Path) -> Result<()> {

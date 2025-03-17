@@ -12,6 +12,7 @@ pub enum Instruction {
     JumpIfZero(Value, String),
     JumpIfNotZero(Value, String),
     Label(String),
+    FunCall(String, Vec<Value>, Value),
 }
 #[derive(Debug)]
 
@@ -110,6 +111,9 @@ impl TackyProgram {
                     }
                     Instruction::Label(label) => {
                         println!("  Label {:?}", label);
+                    }
+                    Instruction::FunCall(name, args, dest) => {
+                        println!("      FunCall {:?} {:?} {:?}", name, args, dest);
                     }
                 }
             }
