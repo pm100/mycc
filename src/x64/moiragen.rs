@@ -1,3 +1,5 @@
+use std::{cmp::max, thread::panicking};
+
 use crate::{codegen::MoiraGenerator, moira::MoiraProgram, tacky::TackyProgram};
 use anyhow::Result;
 
@@ -18,7 +20,30 @@ impl X64MoiraGenerator {
             moira: MoiraProgram::new(),
         }
     }
+    fn moira(&mut self, inst: Instruction) {
+        self.moira.add_instruction(inst);
+    }
     fn gen_function(&mut self, function: &crate::tacky::Function) -> Result<()> {
+        let reglist: [Register; 4] = [Register::RCX, Register::RDX, Register::R8, Register::R9];
+
+        // let mut argoff = 0;
+        for idx in 0..function.parameters.len() {
+            if idx < reglist.len() {
+                let param = &function.parameters[idx];
+                self.moira(Instruction::Mov(
+                    Operand::Register(reglist[idx].clone()),
+                    Operand::Pseudo(param.clone()),
+                ));
+            } else {
+                let param = &function.parameters[(function.parameters.len() - idx) + 3];
+                self.moira(Instruction::Mov(
+                    Operand::Stack(((function.parameters.len() - idx + 5) * 8) as i32),
+                    Operand::Pseudo(param.clone()),
+                ));
+                //self.moira(Instruction::Push(Operand::Register(Register::RSP)));
+            }
+            //   argoff += 1;
+        }
         for instruction in &function.instructions {
             self.gen_instruction(instruction)?;
         }
@@ -91,7 +116,41 @@ impl X64MoiraGenerator {
             }
             tacky::Instruction::FunCall(name, args, dest) => {
                 let dest = self.get_value(dest);
+                let reglist: [Register; 4] =
+                    [Register::RCX, Register::RDX, Register::R8, Register::R9];
+                let stack_delta = max(args.len(), 4) as i32 * 8;
 
+                for idx in 0..args.len() {
+                    if idx < reglist.len() {
+                        let arg = &args[idx];
+                        let argval = self.get_value(arg);
+                        self.moira(Instruction::Mov(
+                            argval,
+                            Operand::Register(reglist[idx].clone()),
+                        ));
+                    } else {
+                        let arg = &args[(args.len() - idx) + 3];
+                        let argval = self.get_value(arg);
+                        match argval {
+                            Operand::Immediate(v) => {
+                                self.moira(Instruction::Push(Operand::Immediate(v.clone())))
+                            }
+
+                            Operand::Pseudo(v) => {
+                                self.moira(Instruction::Mov(
+                                    Operand::Pseudo(v.clone()),
+                                    Operand::Register(Register::AX),
+                                ));
+                                self.moira(Instruction::Push(Operand::Register(Register::RAX)));
+                            }
+                            _ => panic!("Invalid Operand"),
+                        }
+                    }
+                }
+                self.moira(Instruction::AllocateStack(32));
+                self.moira(Instruction::Call(name.clone()));
+                self.moira(Instruction::DeallocateStack(stack_delta));
+                self.moira(Instruction::Mov(Operand::Register(Register::AX), dest));
                 //    self.moira
                 //   .add_instruction(Instruction::Call(name.clone(), args.clone(), dest));
             }

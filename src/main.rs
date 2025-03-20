@@ -9,11 +9,11 @@ pub mod tacky;
 pub mod x64 {
     pub mod moira_inst;
     pub mod moiragen;
-    pub mod x64gen;
+    pub mod nasmgen;
 }
 //use crate::x64::x64gen::X64CodeGenerator;
 use crate::codegen::MoiraGenerator;
-use crate::x64::x64gen::X64CodeGenerator;
+use crate::x64::nasmgen::X64CodeGenerator;
 use anyhow::Result;
 use codegen::MoiraCompiler;
 use x64::moiragen::X64MoiraGenerator;
@@ -37,15 +37,18 @@ struct Cli {
     codegen: bool,
     #[arg(long)]
     validate: bool,
+    #[arg(short, long)]
+    compile_only: bool,
 }
 fn main() -> ExitCode {
     let mut cli = Cli::parse();
 
-    println!("lex: {:?}", cli.lex);
-    println!("parse: {:?}", cli.parse);
-    println!("codegen: {:?}", cli.codegen);
-    println!("validate: {:?}", cli.validate);
-    println!("source: {:?}", &cli.source);
+    eprintln!("lex: {:?}", cli.lex);
+    eprintln!("parse: {:?}", cli.parse);
+    eprintln!("codegen: {:?}", cli.codegen);
+    eprintln!("validate: {:?}", cli.validate);
+    eprintln!("source: {:?}", &cli.source);
+    eprintln!("compile_only: {:?}", cli.compile_only);
 
     let stub = "mycc_cpp";
     //uuid::Uuid::new_v4()
@@ -84,7 +87,7 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
     cli.source.set_extension("exe");
-    match build(&preproc_output, &cli.source) {
+    match build(&preproc_output, &cli.source, cli.compile_only) {
         Ok(()) => {
             return ExitCode::SUCCESS;
         }
@@ -119,17 +122,18 @@ fn codegen(path: &Path) -> Result<()> {
     let tackyx = parser.parse();
     match tackyx {
         Ok(tacky) => {
+            tacky.dump();
             let mut gen = X64MoiraGenerator::new();
-            let moira_ast = gen.generate_moira(tacky)?;
-            moira_ast.dump();
-            // let asm_ast = moira::AsmGenerator::new().generate(&tacky);
-            // asm_ast.dump();
+            // let mut moira = MoiraProgram::<Instruction>::new();
+            let moira = gen.generate_moira(tacky)?;
+            moira.dump();
 
-            // let stub = "mycc_cpp";
-            // let gen_output = std::env::temp_dir().join(format!("{}.s", stub));
-
-            // let mut gen = X64CodeGenerator::new();
-            //    gen.generate(&tacky, &gen_output)?;
+            let stub = "mycc_cpp";
+            let gen_output = std::env::temp_dir().join(format!("{}.s", stub));
+            let gen_output = PathBuf::from(format!("{}.asm", stub));
+            let mut gen = X64CodeGenerator::new();
+            gen.generate_asm(moira, &gen_output)?;
+            // crate::cpp::assemble_link(&gen_output, output, compile_only)?;
         }
         Err(e) => {
             println!("Error: {:?}", e);
@@ -140,7 +144,7 @@ fn codegen(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn build(source: &Path, output: &Path) -> Result<()> {
+fn build(source: &Path, output: &Path, compile_only: bool) -> Result<()> {
     let mut parser = parser::Parser::new(source);
     let tackyx = parser.parse();
     match tackyx {
@@ -156,7 +160,7 @@ fn build(source: &Path, output: &Path) -> Result<()> {
             let gen_output = PathBuf::from(format!("{}.asm", stub));
             let mut gen = X64CodeGenerator::new();
             gen.generate_asm(moira, &gen_output)?;
-            crate::cpp::assemble_link(&gen_output, output)?;
+            crate::cpp::assemble_link(&gen_output, output, compile_only)?;
         }
         Err(e) => {
             println!("Error: {:?}", e);

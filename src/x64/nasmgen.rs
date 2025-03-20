@@ -71,24 +71,25 @@ impl X64CodeGenerator {
             })
             .collect::<HashMap<_, _>>();
         println!("Generating x64 code for {:?} functions", self.func_table);
-        writeln!(writer, "INCLUDELIB LIBCMT")?;
-        writeln!(writer, "_TEXT   SEGMENT")?;
+        writeln!(writer, "bits 64")?;
+        writeln!(writer, "default rel")?;
+        writeln!(writer, "segment .text")?;
         for idx in 0..moira.functions.len() {
             let function = moira.functions[idx].clone();
             self.gen_function(&function, writer)?;
         }
-        writeln!(writer, "_TEXT   ENDS")?;
+        //    writeln!(writer, "_TEXT   ENDS")?;
         for (extern_name, mangled) in self
             .func_table
             .iter()
             .filter(|(_, v)| v.external)
             .map(|(_, v)| (v.name.clone(), v.mangled_name.clone()))
         {
-            writeln!(writer, "option nokeyword: <{}>", extern_name)?;
-            writeln!(writer, "alias <{}> = <{}>", extern_name, mangled)?;
-            writeln!(writer, "EXTERN {}:PROC", mangled)?;
+            //      writeln!(writer, "option nokeyword: <{}>", extern_name)?;
+            //      writeln!(writer, "alias <{}> = <{}>", extern_name, mangled)?;
+            writeln!(writer, "extern {}", extern_name)?;
         }
-        writeln!(writer, "END")?;
+        // writeln!(writer, "END")?;
         Ok(())
     }
     fn gen_function(
@@ -103,7 +104,7 @@ impl X64CodeGenerator {
             self.gen_instruction(instruction, writer)?;
         }
         let mangled_name = self.mangle_name(&function.name);
-        writeln!(writer, "{} ENDP", mangled_name)?;
+        // writeln!(writer, "{} ENDP", mangled_name)?;
 
         Ok(())
     }
@@ -123,8 +124,8 @@ impl X64CodeGenerator {
         if mangled_name != function.name {
             writeln!(writer, "alias <{}> = <{}>", function.name, mangled_name)?;
         }
-        writeln!(writer, "PUBLIC {}", mangled_name)?;
-        writeln!(writer, "{} PROC", mangled_name)?;
+        writeln!(writer, "global {}", mangled_name)?;
+        writeln!(writer, "{}: ", mangled_name)?;
         writeln!(writer, "        push rbp")?;
         writeln!(writer, "        mov rbp, rsp")?;
         writeln!(writer, "        sub rsp, {}", self.next_offset)?;
@@ -240,6 +241,7 @@ impl X64CodeGenerator {
                 Register::R9 => "r9d".to_string(),
                 Register::RDX => "edx".to_string(),
                 Register::RCX => "ecx".to_string(),
+                Register::RAX => "rax".to_string(),
             },
             Operand::Stack(offset) => {
                 let qual = match opsize {
@@ -248,16 +250,16 @@ impl X64CodeGenerator {
                     4 => "DWORD",
                     _ => "QWORD",
                 };
-                format!("{} PTR[rbp{:+}]", qual, offset)
+                format!("{} [rbp{:+}]", qual, offset)
             }
         };
         Ok(val_str)
     }
     fn mangle_name(&self, name: &str) -> String {
-        if name == "main" {
-            return name.to_string();
-        }
-        format!("_{}", name)
+        //if name == "main" {
+        return name.to_string();
+        // }
+        // format!("_{}", name)
     }
     fn fixup_pass(&mut self, function: &Function<Instruction>) -> Result<Vec<Instruction>> {
         self.next_offset = 0;

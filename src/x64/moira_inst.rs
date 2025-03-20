@@ -11,7 +11,9 @@ pub enum Instruction {
     JmpCC(CondCode, String),
     SetCC(CondCode, Operand),
     Label(String),
-    Call(String, Vec<Operand>, Operand),
+    Call(String),
+    Push(Operand),
+    DeallocateStack(i32),
     AllocateStack(i32),
 }
 #[derive(Debug, Clone)]
@@ -42,9 +44,14 @@ pub enum Operand {
 pub enum Register {
     AX,
     DX,
+    R8,
+    R9,
+    RCX,
+    RDX,
     R10,
     R11,
     CL,
+    RAX,
 }
 #[derive(Debug, Clone)]
 pub enum CondCode {

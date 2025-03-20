@@ -134,7 +134,7 @@ impl Parser {
             return_type: SymbolType::Int, // always at the moment
             args: Vec::new(),
         };
-        let mut arg_types = &mut symbol_det.as_function_mut().unwrap().1;
+        let arg_types = &mut symbol_det.as_function_mut().unwrap().1;
         self.expect(Token::LeftParen)?;
 
         let mut arg_names = Vec::new();
@@ -143,13 +143,8 @@ impl Parser {
         loop {
             let token = self.next_token()?;
             if token == Token::RightParen {
-                // self.next_token()?;
                 break;
             }
-            // let SymbolDetails::Function {
-            //     return_type: _,
-            //     ref mut args,
-            // } = symbol_det;
 
             match token {
                 Token::Int => {
@@ -260,12 +255,13 @@ impl Parser {
         if !body_allowed {
             bail!("Function {} definition not allowed here", function_name);
         }
-        self.tacky.add_function(&function_name);
+        let mut new_names = Vec::new();
         self.variables.clear();
         self.variables.push(HashMap::new());
         self.push_symbols();
         for arg in arg_names {
             let new_name = self.make_newname(&arg);
+            new_names.push(new_name.clone());
             self.variables().insert(
                 arg.clone(),
                 VariableName {
@@ -283,6 +279,8 @@ impl Parser {
             };
             self.insert_symbol(&arg, symbol);
         }
+        self.tacky.add_function(&function_name, &new_names);
+
         self.do_function_body()?;
         Ok(())
     }
@@ -770,10 +768,13 @@ impl Parser {
         }
 
         let sym = Self::previous_symbol(6);
+        // print!(
+        //     "{:?}:{:?}",
+        //     sym.as_ref().and_then(BacktraceSymbol::filename),
+        //     sym.as_ref().and_then(BacktraceSymbol::lineno)
+        // );
         println!(
-            "                  {:?}:{:?} next_token {:?} peeks={} blocks={}",
-            sym.as_ref().and_then(BacktraceSymbol::filename),
-            sym.as_ref().and_then(BacktraceSymbol::lineno),
+            "                  next_token {:?} peeks={} blocks={}",
             token,
             self.peeked_tokens.len(),
             self.variables.len(),

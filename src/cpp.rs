@@ -96,13 +96,13 @@ impl Compiler {
         }
     }
 
-    fn assemble_link(&self, source: &Path, dest: &Path) -> Result<()> {
+    fn assemble_link(&self, source: &Path, dest: &Path, compile_only: bool) -> Result<()> {
         match self {
             Self::GnuClang(path) => Self::gnu_clang(path, source, dest),
             Self::Msvc(path) => {
                 let mut path = path.clone();
                 path.set_file_name("ml64.exe");
-                Self::msvc_asm(&path, source, dest)
+                Self::msvc_asm(&path, source, dest, compile_only)
             }
         }
     }
@@ -134,12 +134,60 @@ impl Compiler {
         })?;
         Ok(())
     }
+    fn msvc_asm(path: &Path, source: &Path, dest: &Path, compile_only: bool) -> Result<()> {
+        println!("nasm: {:?} {:?} {:?}", path, source, dest);
 
-    fn msvc_asm(path: &Path, source: &Path, dest: &Path) -> Result<()> {
-        println!("msvc_asm: {:?} {:?} {:?}", path, source, dest);
+        let temp_obj = dest.with_extension("obj").display().to_string();
+        capture(
+            Command::new("nasm")
+                .args(["-f", "win64", "-o"])
+                .arg(temp_obj.clone())
+                .arg(source)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()?,
+        )?;
+        if compile_only {
+            return Ok(());
+        }
+        let args = vec![
+            "/subsystem:console",
+            "/entry:main",
+            "/defaultlib:ucrt.lib",
+            "/defaultlib:msvcrt.lib",
+            "/defaultlib:legacy_stdio_definitions.lib",
+            "/defaultlib:Kernel32.lib",
+            "/defaultlib:Shell32.lib",
+            "/nologo",
+            "/incremental:no",
+        ];
+        capture({
+            Command::new(path.with_file_name("link.exe"))
+                .args(args)
+                .arg(temp_obj)
+                .arg(format!("/out:{}", dest.display()))
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()?
+        })?;
+        Ok(())
+    }
+
+    fn msvc_asm_masm(path: &Path, source: &Path, dest: &Path, compile_only: bool) -> Result<()> {
+        let args = if compile_only {
+            vec![
+                format!("/Fo{}", dest.with_extension("obj").display()),
+                "/c".to_string(),
+            ]
+        } else {
+            vec![format!("/Fe{}", dest.display())]
+        };
+        println!("msvc_asm: {:?} {:?} {:?} {:?}", path, source, dest, args);
         capture({
             Command::new(path)
-                .args([format!("/Fe{}", dest.display()).as_str()])
+                .args(args)
                 .arg(source)
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
@@ -156,8 +204,8 @@ pub fn preprocess(source: &Path, dest: &Path) -> Result<()> {
     comp.preprocess(source, dest)
 }
 
-pub fn assemble_link(source: &Path, output: &Path) -> Result<()> {
+pub fn assemble_link(source: &Path, output: &Path, compile_only: bool) -> Result<()> {
     let comp = COMPILER.as_ref().unwrap();
 
-    comp.assemble_link(source, output)
+    comp.assemble_link(source, output, compile_only)
 }

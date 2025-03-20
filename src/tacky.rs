@@ -51,6 +51,7 @@ pub enum Value {
 
 pub struct Function {
     pub name: String,
+    pub parameters: Vec<String>,
     pub instructions: Vec<Instruction>,
 }
 
@@ -68,9 +69,10 @@ impl TackyProgram {
         }
     }
 
-    pub fn add_function(&mut self, name: &str) {
+    pub fn add_function(&mut self, name: &str, params: &Vec<String>) {
         self.functions.push(Function {
             name: name.to_string(),
+            parameters: params.clone(),
             instructions: vec![],
         });
         self.current_function = self.functions.len() - 1;
@@ -85,7 +87,7 @@ impl TackyProgram {
     pub fn dump(&self) {
         println!("Dumping TackyProgram");
         for function in &self.functions {
-            println!("Function: {}", function.name);
+            println!("Function: {} {:?}", function.name, function.parameters);
             for instruction in &function.instructions {
                 match instruction {
                     Instruction::Return(val) => {
