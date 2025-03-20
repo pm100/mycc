@@ -86,6 +86,7 @@ pub struct Parser {
     break_label_stack: Vec<String>,
     pub(crate) symbol_stack: Vec<HashMap<String, Symbol>>,
     pub(crate) nest: String,
+    current_function_name: String,
 }
 
 impl Parser {
@@ -104,6 +105,7 @@ impl Parser {
             switch_context_stack: Vec::new(),
             break_label_stack: Vec::new(),
             symbol_stack: vec![HashMap::new()],
+            current_function_name: String::new(),
         }
     }
 
@@ -125,6 +127,7 @@ impl Parser {
         self.expect(Token::Int)?;
 
         let function_name = expect!(self, Token::Identifier);
+        self.current_function_name = function_name.clone();
 
         println!("Function: {}", function_name);
         // self.tacky.add_function(&function_name);
@@ -544,7 +547,8 @@ impl Parser {
     }
     fn do_goto(&mut self) -> Result<()> {
         self.next_token()?;
-        let label = format!("__{}__", expect!(self, Token::Identifier));
+        let label = expect!(self, Token::Identifier);
+        let label = self.gen_label(&label);
         if let Some(_) = self.labels.get(&label) {
         } else {
             self.labels.insert(label.clone(), label.clone());
@@ -562,10 +566,16 @@ impl Parser {
         Ok(())
     }
     fn do_label(&mut self) -> Result<()> {
-        let label = format!("__{}__", expect!(self, Token::Identifier));
+        let label = expect!(self, Token::Identifier);
+        let label = self.gen_label(&label);
         self.expect(Token::Colon)?;
         self.instruction(Instruction::Label(label));
         Ok(())
+    }
+
+    fn gen_label(&self, name: &str) -> String {
+        let label = format!("__{}${}__", self.current_function_name, name);
+        label
     }
     fn do_if(&mut self) -> Result<()> {
         self.next_token()?;
