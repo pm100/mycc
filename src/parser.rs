@@ -706,6 +706,7 @@ impl Parser {
             self.instruction(Instruction::JumpIfZero(dest, next_case_label));
         }
         self.instruction(Instruction::Label(this_drop_thru_label.clone()));
+        self.do_statement()?;
         Ok(())
     }
     fn do_default(&mut self) -> Result<()> {

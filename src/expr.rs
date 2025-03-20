@@ -323,7 +323,7 @@ impl Parser {
             }
             _ => {
                 //println!("huh? {:?}", token);
-                bail!("huh? {:?}", token);
+                bail!("unexpected input {:?}", token);
             }
         }
     }
