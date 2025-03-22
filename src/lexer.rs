@@ -77,6 +77,8 @@ pub enum Token {
     Case,
     Default,
     Switch,
+    Extern,
+    Static,
 
     // special
     Eof,
@@ -299,6 +301,8 @@ impl Lexer {
             "case" => Token::Case,
             "default" => Token::Default,
             "switch" => Token::Switch,
+            "extern" => Token::Extern,
+            "static" => Token::Static,
 
             _ => Token::Identifier(s.to_string()),
         }

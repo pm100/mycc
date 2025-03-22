@@ -1,5 +1,8 @@
+use std::arch::global_asm;
+
 pub struct TackyProgram {
     pub functions: Vec<Function>,
+    pub static_variables: Vec<StaticVariable>,
     current_function: usize,
 }
 #[derive(Debug)]
@@ -53,8 +56,13 @@ pub struct Function {
     pub name: String,
     pub parameters: Vec<String>,
     pub instructions: Vec<Instruction>,
+    pub global: bool,
 }
-
+pub struct StaticVariable {
+    pub name: String,
+    pub value: i32,
+    pub global: bool,
+}
 impl Default for TackyProgram {
     fn default() -> Self {
         Self::new()
@@ -66,14 +74,22 @@ impl TackyProgram {
         TackyProgram {
             functions: Vec::new(),
             current_function: 0,
+            static_variables: Vec::new(),
         }
     }
-
-    pub fn add_function(&mut self, name: &str, params: &Vec<String>) {
+    pub fn add_static_variable(&mut self, name: &str, value: i32, global: bool) {
+        self.static_variables.push(StaticVariable {
+            name: name.to_string(),
+            value,
+            global,
+        });
+    }
+    pub fn add_function(&mut self, name: &str, params: &Vec<String>, global: bool) {
         self.functions.push(Function {
             name: name.to_string(),
             parameters: params.clone(),
             instructions: vec![],
+            global,
         });
         self.current_function = self.functions.len() - 1;
     }
@@ -86,8 +102,17 @@ impl TackyProgram {
 
     pub fn dump(&self) {
         println!("Dumping TackyProgram");
+        for static_variable in &self.static_variables {
+            println!(
+                "Static Variable: {} = {} Global: {}",
+                static_variable.name, static_variable.value, static_variable.global
+            );
+        }
         for function in &self.functions {
-            println!("Function: {} {:?}", function.name, function.parameters);
+            println!(
+                "Function: {} {:?} global:{}",
+                function.name, function.parameters, function.global
+            );
             for instruction in &function.instructions {
                 match instruction {
                     Instruction::Return(val) => {

@@ -43,12 +43,12 @@ struct Cli {
 fn main() -> ExitCode {
     let mut cli = Cli::parse();
 
-    eprintln!("lex: {:?}", cli.lex);
-    eprintln!("parse: {:?}", cli.parse);
-    eprintln!("codegen: {:?}", cli.codegen);
-    eprintln!("validate: {:?}", cli.validate);
-    eprintln!("source: {:?}", &cli.source);
-    eprintln!("compile_only: {:?}", cli.compile_only);
+    // eprintln!("lex: {:?}", cli.lex);
+    // eprintln!("parse: {:?}", cli.parse);
+    // eprintln!("codegen: {:?}", cli.codegen);
+    // eprintln!("validate: {:?}", cli.validate);
+    // eprintln!("source: {:?}", &cli.source);
+    // eprintln!("compile_only: {:?}", cli.compile_only);
 
     let stub = "mycc_cpp";
     //uuid::Uuid::new_v4()
@@ -163,7 +163,7 @@ fn build(source: &Path, output: &Path, compile_only: bool) -> Result<()> {
             crate::cpp::assemble_link(&gen_output, output, compile_only)?;
         }
         Err(e) => {
-            println!("Error: {:?}", e);
+            //println!("Error: {:?}", e);
             return Err(e);
         }
     }

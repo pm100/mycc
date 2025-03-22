@@ -4,6 +4,7 @@ use crate::{
     tacky::{BinaryOperator, Instruction, TackyProgram, UnaryOperator, Value},
 };
 use anyhow::{bail, Result};
+use backtrace::Symbol;
 impl Parser {
     pub(crate) fn do_expression(&mut self, min_prec: i32) -> Result<Value> {
         //       println!("{}do_expression {}", self.nest, min_prec);
@@ -38,7 +39,7 @@ impl Parser {
                 | Token::RemainderEquals => {
                     self.next_token()?;
                     if let Value::Variable(ref var) = left {
-                        let lookup = self.variables().values().any(|v| v.name == *var);
+                        let lookup = self.local_variables().values().any(|v| v.name == *var);
                         if !lookup {
                             if var.starts_with("temp.") {
                                 // puke
@@ -312,10 +313,24 @@ impl Parser {
                     self.instruction(Instruction::FunCall(name, args, ret_dest.clone()));
                     Ok(ret_dest)
                 } else {
-                    if self.variables().contains_key(&name) {
-                        let var = self.variables().get(&name).unwrap().clone();
-
-                        Ok(Value::Variable(var.name.clone()))
+                    if let Some((symbol, _)) = self.lookup_symbol(&name) {
+                        match symbol.details {
+                            SymbolDetails::Function { .. } => {
+                                bail!("Expected variable, got function {:?}", name);
+                            }
+                            SymbolDetails::Variable { rename, stype: _ } => {
+                                return Ok(Value::Variable(rename));
+                            }
+                            SymbolDetails::ScopePull => {
+                                let real_symbol = self.get_global_symbol(&name);
+                                return Ok(Value::Variable(
+                                    real_symbol.details.as_variable().unwrap().0.clone(),
+                                ));
+                            }
+                            _ => {
+                                unreachable!()
+                            }
+                        }
                     } else {
                         bail!("Variable {} not declared", name);
                     }
