@@ -2,6 +2,7 @@ use crate::moira::{Function, MoiraProgram};
 
 use crate::codegen::MoiraCompiler;
 use anyhow::{bail, Result};
+use pest::pratt_parser::Op;
 use std::collections::hash_map::OccupiedEntry;
 use std::collections::{
     hash_map::Entry::{Occupied, Vacant},
@@ -73,6 +74,7 @@ impl X64CodeGenerator {
         println!("Generating x64 code for {:?} functions", self.func_table);
         writeln!(writer, "bits 64")?;
         writeln!(writer, "default rel")?;
+        self.gen_vars(moira, writer)?;
         writeln!(writer, "segment .text")?;
         for idx in 0..moira.functions.len() {
             let function = moira.functions[idx].clone();
@@ -90,6 +92,25 @@ impl X64CodeGenerator {
             writeln!(writer, "extern {}", extern_name)?;
         }
         // writeln!(writer, "END")?;
+        Ok(())
+    }
+
+    fn gen_vars(
+        &mut self,
+        moira: &MoiraProgram<Instruction>,
+        writer: &mut BufWriter<std::fs::File>,
+    ) -> Result<()> {
+        for var in moira.top_vars.iter() {
+            writeln!(writer, "segment .data")?;
+            if var.external {
+                writeln!(writer, "extern {}", var.name)?;
+            } else {
+                if var.global {
+                    writeln!(writer, "global {}", var.name)?;
+                }
+                writeln!(writer, "{} dd {}", var.name, var.value)?;
+            }
+        }
         Ok(())
     }
     fn gen_function(
@@ -124,7 +145,10 @@ impl X64CodeGenerator {
         if mangled_name != function.name {
             writeln!(writer, "alias <{}> = <{}>", function.name, mangled_name)?;
         }
-        writeln!(writer, "global {}", mangled_name)?;
+        if function.global {
+            writeln!(writer, "global {}", function.name)?;
+        }
+        // writeln!(writer, "global {}", mangled_name)?;
         writeln!(writer, "{}: ", mangled_name)?;
         writeln!(writer, "        push rbp")?;
         writeln!(writer, "        mov rbp, rsp")?;
@@ -147,7 +171,7 @@ impl X64CodeGenerator {
                 let dest_str = self.get_operand(dest, 4)?;
                 let src_str = self.get_operand(
                     src,
-                    if dest_str == "cl" && Self::is_stack(src) {
+                    if dest_str == "cl" && Self::is_memory(src) {
                         1
                     } else {
                         4
@@ -252,6 +276,15 @@ impl X64CodeGenerator {
                 };
                 format!("{} [rbp{:+}]", qual, offset)
             }
+            Operand::Data(data) => {
+                let qual = match opsize {
+                    1 => "BYTE",
+                    2 => "WORD",
+                    4 => "DWORD",
+                    _ => "QWORD",
+                };
+                format!("{} [{}]", qual, data)
+            }
         };
         Ok(val_str)
     }
@@ -270,7 +303,7 @@ impl X64CodeGenerator {
                 Instruction::Mov(src, dest) => {
                     let new_src = self.fix_pseudo(src)?;
                     let new_dest = self.fix_pseudo(dest)?;
-                    if Self::is_stack(&new_src) && Self::is_stack(&new_dest) {
+                    if Self::is_memory(&new_src) && Self::is_memory(&new_dest) {
                         let scratch = Operand::Register(SCRATCH_REGISTER1);
                         new_instructions.push(Instruction::Mov(new_src, scratch.clone()));
                         new_instructions.push(Instruction::Mov(scratch, new_dest));
@@ -288,7 +321,7 @@ impl X64CodeGenerator {
                         | BinaryOperator::BitAnd
                         | BinaryOperator::BitOr
                         | BinaryOperator::BitXor => {
-                            if Self::is_stack(&new_src) && Self::is_stack(&new_dest) {
+                            if Self::is_memory(&new_src) && Self::is_memory(&new_dest) {
                                 let scratch = Operand::Register(SCRATCH_REGISTER1);
                                 new_instructions.push(Instruction::Mov(new_src, scratch.clone()));
                                 new_instructions.push(Instruction::Binary(
@@ -305,7 +338,7 @@ impl X64CodeGenerator {
                             }
                         }
                         BinaryOperator::Mult => {
-                            if Self::is_stack(&new_dest) {
+                            if Self::is_memory(&new_dest) {
                                 let scratch = Operand::Register(SCRATCH_REGISTER2);
                                 new_instructions.push(Instruction::Mov(new_src, scratch.clone()));
                                 new_instructions.push(Instruction::Binary(
@@ -319,7 +352,7 @@ impl X64CodeGenerator {
                             }
                         }
                         BinaryOperator::ShiftLeft | BinaryOperator::ShiftRight => {
-                            if Self::is_stack(&new_dest) {
+                            if Self::is_memory(&new_dest) {
                                 let scratch = Operand::Register(Register::CL);
                                 new_instructions.push(Instruction::Mov(new_src, scratch.clone()));
                                 new_instructions.push(Instruction::Binary(
@@ -360,7 +393,7 @@ impl X64CodeGenerator {
                         let scratch = Operand::Register(SCRATCH_REGISTER2);
                         new_instructions.push(Instruction::Mov(new_dest, scratch.clone()));
                         new_instructions.push(Instruction::Cmp(new_src.clone(), scratch.clone()));
-                    } else if Self::is_stack(&new_dest) && Self::is_stack(&new_src) {
+                    } else if Self::is_memory(&new_dest) && Self::is_memory(&new_src) {
                         let scratch = Operand::Register(SCRATCH_REGISTER1);
                         new_instructions.push(Instruction::Mov(new_dest, scratch.clone()));
                         new_instructions.push(Instruction::Cmp(new_src.clone(), scratch.clone()));
@@ -395,8 +428,8 @@ impl X64CodeGenerator {
         }
         Ok(new_instructions)
     }
-    fn is_stack(operand: &Operand) -> bool {
-        matches!(operand, Operand::Stack(_))
+    fn is_memory(operand: &Operand) -> bool {
+        matches!(operand, Operand::Stack(_)) || matches!(operand, Operand::Data(_))
     }
     fn is_constant(operand: &Operand) -> bool {
         matches!(operand, Operand::Immediate(_))
@@ -419,10 +452,12 @@ impl X64CodeGenerator {
             Operand::Register(_) => 4,
             Operand::Pseudo(_) => 4,
             Operand::Stack(_) => 4,
+            Operand::Data(_) => 4,
         }
     }
     fn fix_pseudo(&mut self, operand: &Operand) -> Result<Operand> {
         if let Operand::Pseudo(pseudo_name) = operand {
+            assert!(pseudo_name.contains('$'));
             let offset = if let Some(offset) = self.pseudo_registers.get(pseudo_name) {
                 *offset
             } else {

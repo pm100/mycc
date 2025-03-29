@@ -1,4 +1,3 @@
-
 use anyhow::Result;
 
 // use crate::tacky::{Function, Instruction, TackyProgram};
@@ -75,14 +74,22 @@ use anyhow::Result;
 #[derive(Debug, Clone)]
 pub struct MoiraProgram<TInst> {
     pub functions: Vec<Function<TInst>>,
+    pub top_vars: Vec<StaticVariable>,
     current_function: usize,
 }
 #[derive(Debug, Clone)]
 pub struct Function<TInst> {
     pub name: String,
     pub instructions: Vec<TInst>,
+    pub global: bool,
 }
-
+#[derive(Debug, Clone)]
+pub struct StaticVariable {
+    pub name: String,
+    pub value: i32,
+    pub global: bool,
+    pub external: bool,
+}
 impl<TInst> Default for MoiraProgram<TInst>
 where
     TInst: std::fmt::Debug + Clone,
@@ -99,6 +106,7 @@ where
     pub fn new() -> Self {
         MoiraProgram {
             functions: Vec::new(),
+            top_vars: Vec::new(),
             current_function: 0,
         }
     }
@@ -108,6 +116,7 @@ where
         self.functions.push(Function {
             name: func.name.to_string(),
             instructions: Vec::new(),
+            global: func.global,
         });
         self.current_function = self.functions.len() - 1;
         Ok(())
@@ -141,6 +150,12 @@ where
     // }
     pub fn dump(&self) {
         println!("Dumping MoiraProgram");
+        for top_var in self.top_vars.iter() {
+            println!(
+                "TopVar: {} = {} Ext {}",
+                top_var.name, top_var.value, top_var.external
+            );
+        }
         for function in self.functions.iter() {
             println!("Function: {}", function.name);
             for instruction in function.instructions.iter() {

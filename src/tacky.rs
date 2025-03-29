@@ -1,8 +1,8 @@
-use std::arch::global_asm;
+use std::{arch::global_asm, collections::HashMap};
 
 pub struct TackyProgram {
     pub functions: Vec<Function>,
-    pub static_variables: Vec<StaticVariable>,
+    pub static_variables: HashMap<String, StaticVariable>,
     current_function: usize,
 }
 #[derive(Debug)]
@@ -58,10 +58,13 @@ pub struct Function {
     pub instructions: Vec<Instruction>,
     pub global: bool,
 }
+#[derive(Debug)]
 pub struct StaticVariable {
     pub name: String,
-    pub value: i32,
+
     pub global: bool,
+    pub external: bool,
+    pub value: Option<Value>,
 }
 impl Default for TackyProgram {
     fn default() -> Self {
@@ -74,15 +77,25 @@ impl TackyProgram {
         TackyProgram {
             functions: Vec::new(),
             current_function: 0,
-            static_variables: Vec::new(),
+            static_variables: HashMap::new(),
         }
     }
-    pub fn add_static_variable(&mut self, name: &str, value: i32, global: bool) {
-        self.static_variables.push(StaticVariable {
-            name: name.to_string(),
-            value,
-            global,
-        });
+    pub fn add_static_variable(
+        &mut self,
+        name: &str,
+        value: Option<Value>,
+        global: bool,
+        external: bool,
+    ) -> Option<StaticVariable> {
+        self.static_variables.insert(
+            name.to_string(),
+            StaticVariable {
+                name: name.to_string(),
+                value,
+                global,
+                external,
+            },
+        )
     }
     pub fn add_function(&mut self, name: &str, params: &Vec<String>, global: bool) {
         self.functions.push(Function {
@@ -102,10 +115,13 @@ impl TackyProgram {
 
     pub fn dump(&self) {
         println!("Dumping TackyProgram");
-        for static_variable in &self.static_variables {
+        for (_, static_variable) in &self.static_variables {
             println!(
-                "Static Variable: {} = {} Global: {}",
-                static_variable.name, static_variable.value, static_variable.global
+                "Static Variable: {} = {:?} Global: {} External: {}",
+                static_variable.name,
+                static_variable.value,
+                static_variable.global,
+                static_variable.external
             );
         }
         for function in &self.functions {

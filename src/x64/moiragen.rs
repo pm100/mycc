@@ -1,6 +1,10 @@
 use std::{cmp::max, thread::panicking};
 
-use crate::{codegen::MoiraGenerator, moira::MoiraProgram, tacky::TackyProgram};
+use crate::{
+    codegen::MoiraGenerator,
+    moira::{MoiraProgram, StaticVariable},
+    tacky::TackyProgram,
+};
 use anyhow::Result;
 
 use super::moira_inst::{BinaryOperator, CondCode, Instruction, Operand, Register, UnaryOperator};
@@ -49,6 +53,7 @@ impl X64MoiraGenerator {
         }
         Ok(())
     }
+
     fn gen_instruction(&mut self, instruction: &crate::tacky::Instruction) -> Result<()> {
         match instruction {
             tacky::Instruction::Return(value) => {
@@ -139,6 +144,13 @@ impl X64MoiraGenerator {
                             Operand::Pseudo(v) => {
                                 self.moira(Instruction::Mov(
                                     Operand::Pseudo(v.clone()),
+                                    Operand::Register(Register::AX),
+                                ));
+                                self.moira(Instruction::Push(Operand::Register(Register::RAX)));
+                            }
+                            Operand::Data(v) => {
+                                self.moira(Instruction::Mov(
+                                    Operand::Data(v.clone()),
                                     Operand::Register(Register::AX),
                                 ));
                                 self.moira(Instruction::Push(Operand::Register(Register::RAX)));
@@ -238,7 +250,13 @@ impl X64MoiraGenerator {
     fn get_value(&self, value: &crate::tacky::Value) -> Operand {
         match value {
             tacky::Value::Int(value) => Operand::Immediate(*value),
-            tacky::Value::Variable(register) => Operand::Pseudo(register.clone()),
+            tacky::Value::Variable(register) => {
+                if self.moira.top_vars.iter().any(|v| v.name == *register) {
+                    Operand::Data(register.clone())
+                } else {
+                    Operand::Pseudo(register.clone())
+                }
+            }
         }
     }
 }
@@ -246,6 +264,20 @@ impl X64MoiraGenerator {
 impl MoiraGenerator for X64MoiraGenerator {
     type InstructionType = Instruction;
     fn generate_moira(&mut self, program: &TackyProgram) -> Result<&MoiraProgram<Instruction>> {
+        for (_, data) in &program.static_variables {
+            let v = match data.value {
+                Some(tacky::Value::Int(value)) => value,
+
+                None => 0,
+                _ => panic!("Invalid static variable value"),
+            };
+            self.moira.top_vars.push(StaticVariable {
+                name: data.name.clone(),
+                global: data.global,
+                value: v,
+                external: data.external,
+            });
+        }
         for function in &program.functions {
             self.moira.gen_function(function)?;
             self.gen_function(function)?;

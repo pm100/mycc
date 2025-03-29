@@ -39,6 +39,7 @@ pub enum Operand {
     Immediate(i32),
     Pseudo(String),
     Stack(i32),
+    Data(String),
 }
 #[derive(Debug, Clone)]
 pub enum Register {

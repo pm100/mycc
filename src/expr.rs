@@ -39,13 +39,17 @@ impl Parser {
                 | Token::RemainderEquals => {
                     self.next_token()?;
                     if let Value::Variable(ref var) = left {
+                        if var.starts_with("$temp$") {
+                            // puke
+                            bail!("not lvalue");
+                        }
                         if !var.contains('$') {
                             let lookup = self.lookup_symbol(var);
                             if lookup.is_none() {
-                                if var.starts_with("temp.") {
-                                    // puke
-                                    bail!("not lvalue");
-                                }
+                                // if var.starts_with("temp$") {
+                                //     // puke
+                                //     bail!("not lvalue");
+                                // }
 
                                 bail!("Variable {} not declared", var);
                             }
@@ -320,7 +324,11 @@ impl Parser {
                             SymbolDetails::Function { .. } => {
                                 bail!("Expected variable, got function {:?}", name);
                             }
-                            SymbolDetails::Variable { rename, stype: _ } => {
+                            SymbolDetails::Variable {
+                                rename,
+                                stype: _,
+                                value: _,
+                            } => {
                                 return Ok(Value::Variable(rename));
                             }
                             SymbolDetails::ScopePull => {
