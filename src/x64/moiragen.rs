@@ -1,4 +1,4 @@
-use std::{cmp::max, thread::panicking};
+use std::cmp::max;
 
 use crate::{
     codegen::MoiraGenerator,
@@ -44,9 +44,7 @@ impl X64MoiraGenerator {
                     Operand::Stack(((function.parameters.len() - idx + 5) * 8) as i32),
                     Operand::Pseudo(param.clone()),
                 ));
-                //self.moira(Instruction::Push(Operand::Register(Register::RSP)));
             }
-            //   argoff += 1;
         }
         for instruction in &function.instructions {
             self.gen_instruction(instruction)?;
@@ -138,7 +136,7 @@ impl X64MoiraGenerator {
                         let argval = self.get_value(arg);
                         match argval {
                             Operand::Immediate(v) => {
-                                self.moira(Instruction::Push(Operand::Immediate(v.clone())))
+                                self.moira(Instruction::Push(Operand::Immediate(v)))
                             }
 
                             Operand::Pseudo(v) => {
@@ -163,8 +161,6 @@ impl X64MoiraGenerator {
                 self.moira(Instruction::Call(name.clone()));
                 self.moira(Instruction::DeallocateStack(stack_delta));
                 self.moira(Instruction::Mov(Operand::Register(Register::AX), dest));
-                //    self.moira
-                //   .add_instruction(Instruction::Call(name.clone(), args.clone(), dest));
             }
         }
         Ok(())
@@ -264,7 +260,7 @@ impl X64MoiraGenerator {
 impl MoiraGenerator for X64MoiraGenerator {
     type InstructionType = Instruction;
     fn generate_moira(&mut self, program: &TackyProgram) -> Result<&MoiraProgram<Instruction>> {
-        for (_, data) in &program.static_variables {
+        for data in program.static_variables.values() {
             let v = match data.value {
                 Some(tacky::Value::Int(value)) => value,
 

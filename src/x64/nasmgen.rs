@@ -1,13 +1,8 @@
 use crate::moira::{Function, MoiraProgram};
 
 use crate::codegen::MoiraCompiler;
-use anyhow::{bail, Result};
-use pest::pratt_parser::Op;
-use std::collections::hash_map::OccupiedEntry;
-use std::collections::{
-    hash_map::Entry::{Occupied, Vacant},
-    HashMap, HashSet,
-};
+use anyhow::Result;
+use std::collections::HashMap;
 use std::io::Write;
 use std::{io::BufWriter, path::Path};
 
@@ -20,8 +15,6 @@ pub struct X64CodeGenerator {
 #[derive(Debug, Clone)]
 struct FunctionDesc {
     name: String,
-    // offset: i32,
-    mangled_name: String,
     external: bool,
 }
 const SCRATCH_REGISTER1: Register = Register::R10;
@@ -65,13 +58,16 @@ impl X64CodeGenerator {
                     f.name.clone(),
                     FunctionDesc {
                         name: f.name.clone(),
-                        mangled_name: self.mangle_name(&f.name),
+
                         external: false,
                     },
                 )
             })
             .collect::<HashMap<_, _>>();
-        println!("Generating x64 code for {:?} functions", self.func_table);
+        println!(
+            "Generating x64 code for {:?} functions",
+            self.func_table.len()
+        );
         writeln!(writer, "bits 64")?;
         writeln!(writer, "default rel")?;
         self.gen_vars(moira, writer)?;
@@ -80,18 +76,16 @@ impl X64CodeGenerator {
             let function = moira.functions[idx].clone();
             self.gen_function(&function, writer)?;
         }
-        //    writeln!(writer, "_TEXT   ENDS")?;
-        for (extern_name, mangled) in self
+
+        for name in self
             .func_table
             .iter()
             .filter(|(_, v)| v.external)
-            .map(|(_, v)| (v.name.clone(), v.mangled_name.clone()))
+            .map(|(_, v)| v.name.clone())
         {
-            //      writeln!(writer, "option nokeyword: <{}>", extern_name)?;
-            //      writeln!(writer, "alias <{}> = <{}>", extern_name, mangled)?;
-            writeln!(writer, "extern {}", extern_name)?;
+            writeln!(writer, "extern {}", name)?;
         }
-        // writeln!(writer, "END")?;
+
         Ok(())
     }
 
@@ -124,8 +118,6 @@ impl X64CodeGenerator {
         for instruction in fixed_instructions.iter() {
             self.gen_instruction(instruction, writer)?;
         }
-        let mangled_name = self.mangle_name(&function.name);
-        // writeln!(writer, "{} ENDP", mangled_name)?;
 
         Ok(())
     }
@@ -136,20 +128,12 @@ impl X64CodeGenerator {
         writer: &mut BufWriter<std::fs::File>,
     ) -> Result<()> {
         println!("Generating prologue for function: {}", function.name);
-        let mangled_name = self
-            .func_table
-            .get(&function.name)
-            .unwrap()
-            .mangled_name
-            .clone();
-        if mangled_name != function.name {
-            writeln!(writer, "alias <{}> = <{}>", function.name, mangled_name)?;
-        }
+
         if function.global {
             writeln!(writer, "global {}", function.name)?;
         }
-        // writeln!(writer, "global {}", mangled_name)?;
-        writeln!(writer, "{}: ", mangled_name)?;
+
+        writeln!(writer, "{}: ", function.name)?;
         writeln!(writer, "        push rbp")?;
         writeln!(writer, "        mov rbp, rsp")?;
         writeln!(writer, "        sub rsp, {}", self.next_offset)?;
@@ -234,8 +218,7 @@ impl X64CodeGenerator {
                 writeln!(writer, "{}:", label)?;
             }
             Instruction::Call(name) => {
-                let mangled_name = self.func_table.get(name).unwrap().mangled_name.clone();
-                writeln!(writer, "        call {}", mangled_name)?;
+                writeln!(writer, "        call {}", name)?;
             }
             Instruction::Push(operand) => {
                 let operand_str = self.get_operand(operand, 8)?;
@@ -247,7 +230,6 @@ impl X64CodeGenerator {
             Instruction::AllocateStack(size) => {
                 writeln!(writer, "        sub rsp, {}", size)?;
             }
-            _ => bail!("Unsupported instruction {:?}", instruction),
         }
         Ok(())
     }
@@ -288,12 +270,7 @@ impl X64CodeGenerator {
         };
         Ok(val_str)
     }
-    fn mangle_name(&self, name: &str) -> String {
-        //if name == "main" {
-        return name.to_string();
-        // }
-        // format!("_{}", name)
-    }
+
     fn fixup_pass(&mut self, function: &Function<Instruction>) -> Result<Vec<Instruction>> {
         self.next_offset = 0;
         self.pseudo_registers.clear();
@@ -408,12 +385,11 @@ impl X64CodeGenerator {
                     new_instructions.push(Instruction::Push(self.fix_pseudo(operand)?));
                 }
                 Instruction::Call(name) => {
-                    let mangled_name = self.mangle_name(name);
                     self.func_table
                         .entry(name.clone())
                         .or_insert_with(|| FunctionDesc {
                             name: name.clone(),
-                            mangled_name: mangled_name,
+
                             external: true,
                         });
                     new_instructions.push(Instruction::Call(name.clone()));
@@ -445,7 +421,7 @@ impl X64CodeGenerator {
         }
         .to_string()
     }
-    fn get_operand_size(&self, operand: &Operand) -> i32 {
+    fn _get_operand_size(&self, operand: &Operand) -> i32 {
         match operand {
             Operand::Immediate(_) => 4,
             Operand::Register(Register::CL) => 1,

@@ -10,7 +10,6 @@ pub trait MoiraGenerator {
     fn generate_moira(
         &mut self,
         program: &TackyProgram,
-        // moira: &mut MoiraProgram<Self::InstructionType>,
     ) -> Result<&MoiraProgram<Self::InstructionType>>;
 }
 pub trait MoiraCompiler {

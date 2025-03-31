@@ -108,7 +108,7 @@ impl Compiler {
     }
 
     // Arguments are the same for Clang and Gnu gcc
-    fn gnu_clang(path: &Path, source: &Path, dest: &Path) -> Result<()> {
+    fn gnu_clang(path: &Path, _source: &Path, _dest: &Path) -> Result<()> {
         let process = Command::new(path)
             .args(["-nostdinc", "-P", "-E", "-x", "c", "-"])
             .stdin(Stdio::piped())
@@ -174,28 +174,6 @@ impl Compiler {
         })?;
         Ok(())
     }
-
-    fn msvc_asm_masm(path: &Path, source: &Path, dest: &Path, compile_only: bool) -> Result<()> {
-        let args = if compile_only {
-            vec![
-                format!("/Fo{}", dest.with_extension("obj").display()),
-                "/c".to_string(),
-            ]
-        } else {
-            vec![format!("/Fe{}", dest.display())]
-        };
-        println!("msvc_asm: {:?} {:?} {:?} {:?}", path, source, dest, args);
-        capture({
-            Command::new(path)
-                .args(args)
-                .arg(source)
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn()?
-        })?;
-        Ok(())
-    }
 }
 
 pub fn preprocess(source: &Path, dest: &Path) -> Result<()> {
@@ -211,7 +189,7 @@ pub fn assemble_link(source: &Path, output: &Path, compile_only: bool) -> Result
 }
 
 pub fn assemble_link_msvc(source: &Path, output: &Path, compile_only: bool) -> Result<()> {
-    let comp = COMPILER.as_ref().unwrap();
+    // let comp = COMPILER.as_ref().unwrap();
 
     let args = if compile_only {
         vec![

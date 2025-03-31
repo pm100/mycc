@@ -149,24 +149,20 @@ impl Lexer {
                 '&' => {
                     if self.match_next('&') {
                         Token::LogicalAnd
+                    } else if self.match_next('=') {
+                        Token::AndEquals
                     } else {
-                        if self.match_next('=') {
-                            Token::AndEquals
-                        } else {
-                            Token::BitwiseAnd
-                        }
+                        Token::BitwiseAnd
                     }
                 }
 
                 '|' => {
                     if self.match_next('|') {
                         Token::LogicalOr
+                    } else if self.match_next('=') {
+                        Token::OrEquals
                     } else {
-                        if self.match_next('=') {
-                            Token::OrEquals
-                        } else {
-                            Token::BitwiseOr
-                        }
+                        Token::BitwiseOr
                     }
                 }
 
@@ -225,23 +221,19 @@ impl Lexer {
                 '-' => {
                     if self.match_next('=') {
                         Token::MinusEquals
+                    } else if self.match_next('-') {
+                        Token::MinusMinus
                     } else {
-                        if self.match_next('-') {
-                            Token::MinusMinus
-                        } else {
-                            Token::Negate
-                        }
+                        Token::Negate
                     }
                 }
                 '+' => {
                     if self.match_next('=') {
                         Token::PlusEquals
+                    } else if self.match_next('+') {
+                        Token::PlusPlus
                     } else {
-                        if self.match_next('+') {
-                            Token::PlusPlus
-                        } else {
-                            Token::Add
-                        }
+                        Token::Add
                     }
                 }
                 '*' => {

@@ -1,6 +1,5 @@
 use anyhow::{bail, Result};
 use backtrace::{Backtrace, BacktraceFrame, BacktraceSymbol};
-use clap::builder::FalseyValueParser;
 use enum_as_inner::EnumAsInner;
 use std::{
     collections::{HashMap, VecDeque},
@@ -32,12 +31,12 @@ pub(crate) struct VariableName {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum SymbolType {
     Int,
-    Void,
+    //  Void,
 }
 #[derive(Debug, Clone, PartialEq)]
 enum Specifier {
     Type(SymbolType),
-    Void,
+    // Void,
     Extern,
     Static,
 }
@@ -166,10 +165,7 @@ impl Parser {
             );
             //  }
         }
-        // for var in self.static_variables {
-        //     self.tacky
-        //         .add_static_variable(&var.name, var.value, var.global);
-        // }
+
         Ok(())
     }
     fn do_function_or_variable(&mut self, func_allowed: bool, body_allowed: bool) -> Result<bool> {
@@ -189,9 +185,7 @@ impl Parser {
                         self.next_token()?;
                         specifiers.push(Specifier::Type(SymbolType::Int));
                     }
-                    // Token::Void => {
-                    //     self.next_token()?;
-                    // }
+    
                     Token::Extern => {
                         self.next_token()?;
                         specifiers.push(Specifier::Extern);
@@ -227,7 +221,7 @@ impl Parser {
             }
             self.do_function(&func_dec_name, &specifiers, body_allowed)?;
         }
-        return Ok(true);
+        Ok(true)
     }
     fn do_function(
         &mut self,
@@ -236,7 +230,7 @@ impl Parser {
         body_allowed: bool,
     ) -> Result<()> {
         let explicit_external = specifiers.contains(&Specifier::Extern);
-
+        // table 10.2
         let mut linkage = match (
             specifiers.contains(&Specifier::Extern),
             specifiers.contains(&Specifier::Static),
@@ -247,7 +241,7 @@ impl Parser {
             (_, true, false) => SymbolLinkage::Internal,
             (_, true, true) => bail!("Function cannot be static"),
             (false, false, false) => SymbolLinkage::None,
-            (_, _, false) => SymbolLinkage::External,
+
             (false, false, true) => SymbolLinkage::External,
         };
         self.current_function_name = name.to_string();
@@ -260,7 +254,7 @@ impl Parser {
         self.expect(Token::LeftParen)?;
 
         let mut arg_names = Vec::new();
-        //let mut arg_types = Vec::new();
+  
 
         loop {
             let token = self.next_token()?;
@@ -365,8 +359,8 @@ impl Parser {
                     false
                 }
                 SymbolDetails::Variable {
-                    rename,
-                    stype,
+                    rename: _,
+                    stype: _,
                     value: _,
                 } => {
                     println!("{:?} {:?}", top, found);
@@ -382,7 +376,7 @@ impl Parser {
                         bail!("Function {} already declared as variable1", name);
                     }
                     true
-                    //bail!("Function {} already declared as variable2", func_dec_name);
+                 
                 }
                 _ => {
                     if top {
@@ -448,7 +442,7 @@ impl Parser {
             let symbol = Symbol {
                 name: arg.clone(),
                 state: SymbolState::Defined,
-                linkage: SymbolLinkage::None, //linkage.clone(),
+                linkage: SymbolLinkage::None, 
                 details: SymbolDetails::Variable {
                     rename: new_name.to_string(),
                     stype: SymbolType::Int,
@@ -468,7 +462,7 @@ impl Parser {
     }
 
     fn do_function_body(&mut self) -> Result<()> {
-        // self.expect(Token::LeftBrace)?;
+
 
         self.do_block()?;
         if self.labels.iter().any(|l| !l.1) {
@@ -486,7 +480,7 @@ impl Parser {
         self.pop_var_map();
         self.pop_symbols();
         self.expect(Token::RightBrace)?;
-        //  self.next_token()?;
+ 
         Ok(())
     }
     fn do_block_item(&mut self) -> Result<()> {
@@ -518,7 +512,7 @@ impl Parser {
             MaybeExternal, // extern keyword
             None,
         }
-        // encapulates the table 10-2 first part => linkage
+        // encapulates the table 10-1 first part => linkage
         let mut linkage = match (self.in_function_body, spec_ext, spec_static) {
             (_, true, true) => bail!("Variable cannot be both extern and static"),
             // file scope
@@ -530,7 +524,7 @@ impl Parser {
             (true, false, false) => Linkage::None,
             (true, true, false) => Linkage::MaybeExternal,
         };
-        // 10-2 second part => state
+        // 10-1 second part => state
         let state = match (self.in_function_body, &linkage, init) {
             // file scope
             (false, Linkage::External, true) => SymbolState::Defined,
@@ -644,12 +638,12 @@ impl Parser {
                 bail!("Variable {} already declared as external function", name);
             }
             if symbol.state == SymbolState::Defined && top && !explicit_external
-            /*&& top && linkage != SymbolLinkage::External */
+      
             {
                 bail!("Variable {} already defined {:?}", name, symbol);
             }
             if symbol.linkage != linkage && top && symbol.linkage != SymbolLinkage::Internal {
-                //  self.dump_symbols();
+             
                 bail!("Variable {} linkage mismatch", name);
             }
 
@@ -663,7 +657,7 @@ impl Parser {
             symbol.clone(),
             top
         );
-        let this_symbol = match (&mut symbol, &linkage) {
+        let _this_symbol = match (&mut symbol, &linkage) {
             // simple case, we have a new variable, so add it to the symbol table
             (None, _) => {
                 let new_sym = Symbol {
@@ -680,7 +674,7 @@ impl Parser {
                 if linkage == SymbolLinkage::External && !self.in_function_body {
                     self.insert_global_symbol(name, new_sym.clone());
                 } else {
-                    self.insert_symbol(&name, new_sym.clone());
+                    self.insert_symbol(name, new_sym.clone());
                 };
                 new_sym
             }
@@ -694,10 +688,8 @@ impl Parser {
                     }
                     SymbolLinkage::Internal => {
                         if explicit_external {
-                        } else {
-                            if top {
-                                bail!("Variable {} already declared as static", name);
-                            }
+                        } else if top {
+                            bail!("Variable {} already declared as static", name);
                         }
                         existing.clone()
                     }
@@ -730,13 +722,13 @@ impl Parser {
                         explicit_external,
                     };
 
-                    self.insert_symbol(&name, pull_sym.clone());
+                    self.insert_symbol(name, pull_sym.clone());
                     pull_sym.clone()
                 } else {
                     x
                 }
             }
-            (Some(symbol), SymbolLinkage::None) => {
+            (Some(_symbol), SymbolLinkage::None) => {
                 let new_sym = Symbol {
                     state: state.clone(),
                     name: name.to_string(),
@@ -748,75 +740,60 @@ impl Parser {
                     },
                     explicit_external,
                 };
-                self.insert_symbol(&name, new_sym.clone());
+                self.insert_symbol(name, new_sym.clone());
                 self.dump_symbols();
                 new_sym.clone()
             }
-            //  (Some(symbol), _) => {}
+          
             (Some(symbol), _) => {
                 symbol.state = SymbolState::Declared;
                 symbol.clone()
             }
         };
-        // if explicit_external {
-        //     self.externs.insert(name.to_string(), this_symbol.clone());
-        // }
+
         if init {
             let val = self.do_expression(0)?;
             if self.in_function_body && is_auto {
                 self.instruction(Instruction::Copy(val, Value::Variable(rename)));
-            } else {
-                if let Value::Int(_) = val {
-                    if !is_auto {
-                        self.externs
-                            .entry(rename.to_string())
-                            .and_modify(|e| {
-                                e.state = SymbolState::Defined;
-                                e.value = Some(val.clone());
-                            })
-                            .or_insert(Extern {
-                                name: rename.to_string(),
-                                linkage: linkage.clone(),
-                                state: SymbolState::Defined,
-                                value: Some(val),
-                                stype: SymbolType::Int,
-                            });
-                    }
-                    //self.tacky.add_static_variable(name, Some(val), true, false);
-                } else {
-                    bail!("Static variable must be initialized to a constant");
+            } else if let Value::Int(_) = val {
+                if !is_auto {
+                    self.externs
+                        .entry(rename.to_string())
+                        .and_modify(|e| {
+                            e.state = SymbolState::Defined;
+                            e.value = Some(val.clone());
+                        })
+                        .or_insert(Extern {
+                            name: rename.to_string(),
+                            linkage: linkage.clone(),
+                            state: SymbolState::Defined,
+                            value: Some(val),
+                            stype: SymbolType::Int,
+                        });
                 }
+           
+            } else {
+                bail!("Static variable must be initialized to a constant");
             }
-        } else {
-            if !is_auto
-            /*&& !this_symbol.details.is_scope_pull() */
-            {
-                //    if !is_auto {
-                //  self.externs.insert(name.to_string(), ext);
-                self.externs
-                    .entry(rename.to_string())
-                    .and_modify(|e| {
-                        if e.state != SymbolState::Defined && state != SymbolState::Declared {
-                            e.state = SymbolState::Defined
-                        }
-                    })
-                    .or_insert(Extern {
-                        name: rename.to_string(),
-                        linkage: linkage.clone(),
-                        state: state, //SymbolState::Defined,
-                        value: None,
-                        stype: SymbolType::Int,
-                    });
-                //     }
-                // if let Some(old_sym) = self.tacky.add_static_variable(
-                //     name,
-                //     None,
-                //     true,
-                //     this_symbol.state != SymbolState::Defined,
-                // ) {
-                //     println!("old sym {:?} new {:?}", old_sym, this_symbol);
-                // }
-            }
+        } else if !is_auto
+    
+        {
+          
+            self.externs
+                .entry(rename.to_string())
+                .and_modify(|e| {
+                    if e.state != SymbolState::Defined && state != SymbolState::Declared {
+                        e.state = SymbolState::Defined
+                    }
+                })
+                .or_insert(Extern {
+                    name: rename.to_string(),
+                    linkage: linkage.clone(),
+                    state, //SymbolState::Defined,
+                    value: None,
+                    stype: SymbolType::Int,
+                });
+
         }
         self.dump_symbols();
 
@@ -858,8 +835,6 @@ impl Parser {
                 }
             }
         };
-        //  self.dump_symbols();
-        // self.dump_var_map();
         Ok(())
     }
     fn do_for(&mut self) -> Result<()> {
@@ -998,11 +973,9 @@ impl Parser {
     fn do_goto(&mut self) -> Result<()> {
         self.next_token()?;
         let label = expect!(self, Token::Identifier);
-        if self.lookup_symbol(&label).is_some() {
-            //    bail!("label name is vairable of function name");
-        }
+
         let label = self.gen_label(&label);
-        if let Some(_) = self.labels.get(&label) {
+        if self.labels.get(&label).is_some() {
         } else {
             self.labels.insert(label.clone(), false);
         }
@@ -1025,18 +998,7 @@ impl Parser {
         self.expect(Token::Colon)?;
         self.instruction(Instruction::Label(label.clone()));
 
-        // let lookup = self.labels.get_mut(&label);
-        // match lookup {
-        //     Some(already) => {
-        //         if already {
-        //             bail!("label already defined");
-        //         } else {
-        //             *already = true
-        //         }
-        //     }
 
-        //     _ => {}
-        // }
         let mut dup = false;
         self.labels
             .entry(label.clone())
@@ -1095,7 +1057,7 @@ impl Parser {
         self.instruction(Instruction::Jump(next_case_label.clone()));
         self.switch_context_stack.push(SwitchContext {
             cases: Vec::new(),
-            value: value,
+            value,
             default_statement_seen: false,
             before_first_case: true,
 
@@ -1157,7 +1119,7 @@ impl Parser {
             if let Some(context) = self.switch_context_stack.last_mut() {
                 // check for duplicate case values
                 if let Some(ref cv) = case_value {
-                    if context.cases.contains(&cv) {
+                    if context.cases.contains(cv) {
                         bail!("Duplicate case value");
                     }
                     context.cases.push(cv.clone());
@@ -1192,7 +1154,7 @@ impl Parser {
     }
     fn do_default(&mut self) -> Result<()> {
         self.next_token()?;
-        //  self.expect(Token::Colon)?;
+
         if let Some(context) = self.switch_context_stack.last_mut() {
             if context.default_statement_seen {
                 bail!("Duplicate default statement");
@@ -1250,7 +1212,7 @@ impl Parser {
         self.tacky.add_instruction(instruction);
     }
     pub(crate) fn next_token(&mut self) -> Result<Token> {
-        let token = if self.peeked_tokens.len() > 0 {
+        let token = if !self.peeked_tokens.is_empty() {
             self.peeked_tokens.pop_front().unwrap()
         } else {
             self.lexer.next_token()?
@@ -1259,18 +1221,7 @@ impl Parser {
             self.eof_hit = true;
         }
 
-        let sym = Self::previous_symbol(6);
-        // print!(
-        //     "{:?}:{:?}",
-        //     sym.as_ref().and_then(BacktraceSymbol::filename),
-        //     sym.as_ref().and_then(BacktraceSymbol::lineno)
-        // );
-        // println!(
-        //     "                  next_token {:?} peeks={} blocks={}",
-        //     token,
-        //     self.peeked_tokens.len(),
-        //     self.local_variables.len(),
-        // );
+
         Ok(token)
     }
     fn dump_var_map(&self) {
@@ -1356,7 +1307,7 @@ impl Parser {
                 self.peeked_tokens.push_back(token.clone());
             }
         }
-        return Ok(self.peeked_tokens[n].clone());
+        Ok(self.peeked_tokens[n].clone())
     }
     fn dump_symbols(&self) {
         println!("=======symbol table dump=======");
@@ -1365,7 +1316,7 @@ impl Parser {
             if sym.is_empty() {
                 println!("{} empty", pad);
             }
-            for (name, sym) in sym.iter() {
+            for (_, sym) in sym.iter() {
                 println!("{} {:?}", pad, sym);
             }
         }
@@ -1375,8 +1326,8 @@ impl Parser {
         println!("=======end symbol table dump=======");
     }
     //https://www.reddit.com/r/rust/comments/6ojuxz/comment/dki11oe/?utm_source=share&utm_medium=web3x&utm_name=web3xcss&utm_term=1&utm_content=share_button
-    fn previous_symbol(level: u32) -> Option<BacktraceSymbol> {
-        let (trace, curr_file, curr_line) = (Backtrace::new(), file!(), line!());
+    fn _previous_symbol(level: u32) -> Option<BacktraceSymbol> {
+        let (trace, _curr_file, _curr_line) = (Backtrace::new(), file!(), line!());
         let frames = trace.frames();
         frames
             .iter()
@@ -1391,12 +1342,5 @@ impl Parser {
             .cloned()
     }
 
-    // fn foo() {
-    //     let sym = previous_symbol(1);
-    //     println!(
-    //         "called from {:?}:{:?}",
-    //         sym.as_ref().and_then(BacktraceSymbol::filename),
-    //         sym.as_ref().and_then(BacktraceSymbol::lineno)
-    //     );
-    // }
+
 }

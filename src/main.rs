@@ -119,7 +119,6 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     }
-    ExitCode::FAILURE
 }
 
 fn lex(path: &Path) -> Result<()> {
@@ -152,7 +151,7 @@ fn codegen(path: &Path) -> Result<()> {
             moira.dump();
 
             let stub = "mycc_cpp";
-            let gen_output = std::env::temp_dir().join(format!("{}.s", stub));
+            // let gen_output = std::env::temp_dir().join(format!("{}.s", stub));
             let gen_output = PathBuf::from(format!("{}.asm", stub));
             let mut gen = X64CodeGenerator::new();
             gen.generate_asm(moira, &gen_output)?;
@@ -179,7 +178,7 @@ fn build(source: &Path, output: &Path, compile_only: bool) -> Result<()> {
             moira.dump();
 
             let stub = "mycc_cpp";
-            let gen_output = std::env::temp_dir().join(format!("{}.s", stub));
+            // let gen_output = std::env::temp_dir().join(format!("{}.s", stub));
             let gen_output = PathBuf::from(format!("{}.asm", stub));
             let mut gen = X64CodeGenerator::new();
             gen.generate_asm(moira, &gen_output)?;

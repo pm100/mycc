@@ -1,4 +1,4 @@
-use std::{arch::global_asm, collections::HashMap};
+use std::collections::HashMap;
 
 pub struct TackyProgram {
     pub functions: Vec<Function>,
@@ -115,7 +115,7 @@ impl TackyProgram {
 
     pub fn dump(&self) {
         println!("Dumping TackyProgram");
-        for (_, static_variable) in &self.static_variables {
+        for static_variable in self.static_variables.values() {
             println!(
                 "Static Variable: {} = {:?} Global: {} External: {}",
                 static_variable.name,

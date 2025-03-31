@@ -1,13 +1,12 @@
 use crate::{
-    lexer::{Lexer, Token},
+    lexer::Token,
     parser::{Parser, SymbolDetails},
-    tacky::{BinaryOperator, Instruction, TackyProgram, UnaryOperator, Value},
+    tacky::{BinaryOperator, Instruction, UnaryOperator, Value},
 };
 use anyhow::{bail, Result};
-use backtrace::Symbol;
 impl Parser {
     pub(crate) fn do_expression(&mut self, min_prec: i32) -> Result<Value> {
-        //       println!("{}do_expression {}", self.nest, min_prec);
+
         let mut left = self.do_factor()?;
         let mut token = self.peek()?;
 
@@ -20,7 +19,7 @@ impl Parser {
         );
         self.nest.push(' ');
         self.nest.push(' ');
-        // let mut token = self.peek()?;
+    
         loop {
             if Self::precedence(&token) < min_prec {
                 break;
@@ -40,17 +39,11 @@ impl Parser {
                     self.next_token()?;
                     if let Value::Variable(ref var) = left {
                         if var.starts_with("$temp$") {
-                            // puke
                             bail!("not lvalue");
                         }
                         if !var.contains('$') {
                             let lookup = self.lookup_symbol(var);
                             if lookup.is_none() {
-                                // if var.starts_with("temp$") {
-                                //     // puke
-                                //     bail!("not lvalue");
-                                // }
-
                                 bail!("Variable {} not declared", var);
                             }
                         }
@@ -92,7 +85,7 @@ impl Parser {
                         Value::Int(1),
                         left.clone(),
                     ));
-                    //self.instruction(Instruction::Copy(ret_dest.clone(), left));
+   
                     ret_dest
                 }
                 Token::MinusMinus => {
@@ -109,7 +102,7 @@ impl Parser {
                         Value::Int(1),
                         left.clone(),
                     ));
-                    //self.instruction(Instruction::Copy(ret_dest.clone(), left));
+         
                     ret_dest
                 }
                 Token::LogicalAnd => {
@@ -265,9 +258,7 @@ impl Parser {
                 if token == Token::LeftParen {
                     // yes it is
 
-                    // if let Some(found) = self.lookup_symbol(&name) {
-                    //     bail!("Expected function, got variable {:?}", name);
-                    // }
+
                     let symargs = if let Some((symbol, _)) = self.lookup_symbol(&name) {
                         if !matches!(symbol.details, SymbolDetails::Function { .. }) {
                             bail!("Expected function, got {:?}", name);
@@ -286,9 +277,9 @@ impl Parser {
                             self.next_token()?;
                             break;
                         }
-                        //    let _ = self.next_token()?;
+               
                         let arg = self.do_expression(0)?;
-                        argidx = argidx + 1;
+                        argidx += 1;
                         args.push(arg);
                         let token = self.next_token()?;
                         match token {
@@ -313,42 +304,34 @@ impl Parser {
                             argidx
                         );
                     }
-                    // self.next_token()?;
+           
                     let dest_name = self.make_temporary();
                     let ret_dest = Value::Variable(dest_name.clone());
                     self.instruction(Instruction::FunCall(name, args, ret_dest.clone()));
                     Ok(ret_dest)
-                } else {
-                    if let Some((symbol, _)) = self.lookup_symbol(&name) {
-                        match symbol.details {
-                            SymbolDetails::Function { .. } => {
-                                bail!("Expected variable, got function {:?}", name);
-                            }
-                            SymbolDetails::Variable {
-                                rename,
-                                stype: _,
-                                value: _,
-                            } => {
-                                return Ok(Value::Variable(rename));
-                            }
-                            SymbolDetails::ScopePull => {
-                                let real_symbol = self.get_global_symbol(&name);
-                                return Ok(Value::Variable(
-                                    real_symbol.details.as_variable().unwrap().0.clone(),
-                                ));
-                            }
-                            _ => {
-                                unreachable!()
-                            }
+                } else if let Some((symbol, _)) = self.lookup_symbol(&name) {
+                    match symbol.details {
+                        SymbolDetails::Function { .. } => {
+                            bail!("Expected variable, got function {:?}", name);
                         }
-                    } else {
-                        bail!("Variable {} not declared2", name);
+                        SymbolDetails::Variable {
+                            rename,
+                            stype: _,
+                            value: _,
+                        } => Ok(Value::Variable(rename)),
+                        SymbolDetails::ScopePull => {
+                            let real_symbol = self.get_global_symbol(&name);
+                            Ok(Value::Variable(
+                                real_symbol.details.as_variable().unwrap().0.clone(),
+                            ))
+                        }
                     }
+                } else {
+                    bail!("Variable {} not declared2", name);
                 }
             }
             _ => {
-                //println!("huh? {:?}", token);
-                bail!("unexpected input {:?}", token);
+                unreachable!("Expected constant, got {:?}", token);
             }
         }
     }
