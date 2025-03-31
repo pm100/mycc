@@ -11,13 +11,15 @@ pub mod x64 {
     pub mod moiragen;
     pub mod nasmgen;
 }
-//use crate::x64::x64gen::X64CodeGenerator;
+
 use crate::codegen::MoiraGenerator;
 use crate::x64::nasmgen::X64CodeGenerator;
 use anyhow::Result;
 use codegen::MoiraCompiler;
+use log::{info, LevelFilter};
+use simplelog::{CombinedLogger, Config, WriteLogger};
 use std::env;
-
+use std::fs::File;
 use x64::moiragen::X64MoiraGenerator;
 
 use std::path::{Path, PathBuf};
@@ -41,16 +43,19 @@ struct Cli {
     validate: bool,
     #[arg(short, long)]
     compile_only: bool,
+    #[arg(short, long)]
+    verbose: bool,
 }
 fn main() -> ExitCode {
+    let _ = CombinedLogger::init(vec![
+        //     TermLogger::new(LevelFilter::Info, Config::default(), TerminalMode::Mixed, ColorChoice::Auto),
+        WriteLogger::new(
+            LevelFilter::Info,
+            Config::default(),
+            File::create("my_rust_bin.log").unwrap(),
+        ),
+    ]);
     let mut cli = Cli::parse();
-
-    // eprintln!("lex: {:?}", cli.lex);
-    // eprintln!("parse: {:?}", cli.parse);
-    // eprintln!("codegen: {:?}", cli.codegen);
-    // eprintln!("validate: {:?}", cli.validate);
-    // eprintln!("source: {:?}", &cli.source);
-    // eprintln!("compile_only: {:?}", cli.compile_only);
 
     if env::var("USE_MSVC").is_ok() {
         let source = cli.source.display().to_string().replace("/", "\\");
@@ -74,10 +79,10 @@ fn main() -> ExitCode {
     }
 
     let stub = "mycc_cpp";
-    //uuid::Uuid::new_v4()
+
     let preproc_output = std::env::temp_dir().join(format!("{}.i", stub));
 
-    println!("preprocessing {:?} => {:?}", &cli.source, &preproc_output);
+    info!("preprocessing {:?} => {:?}", &cli.source, &preproc_output);
     cpp::preprocess(&cli.source, &preproc_output).unwrap();
     if cli.lex {
         match lex(&preproc_output) {
@@ -92,7 +97,7 @@ fn main() -> ExitCode {
     }
 
     if cli.parse || cli.validate {
-        match parse(&preproc_output) {
+        match parse(&preproc_output, &cli.source) {
             Ok(()) => {
                 return ExitCode::SUCCESS;
             }
@@ -104,13 +109,13 @@ fn main() -> ExitCode {
     }
 
     if cli.codegen {
-        if codegen(&preproc_output).is_ok() {
+        if codegen(&preproc_output, &cli.source).is_ok() {
             return ExitCode::SUCCESS;
         };
         return ExitCode::FAILURE;
     }
     cli.source.set_extension("exe");
-    match build(&preproc_output, &cli.source, cli.compile_only) {
+    match build(&preproc_output, &cli.source, &cli.source, cli.compile_only) {
         Ok(()) => {
             return ExitCode::SUCCESS;
         }
@@ -133,14 +138,14 @@ fn lex(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn parse(path: &Path) -> Result<()> {
-    let mut parser = parser::Parser::new(path);
+fn parse(path: &Path, real_source: &Path) -> Result<()> {
+    let mut parser = parser::Parser::new(path, real_source);
     let _ = parser.parse()?;
     Ok(())
 }
 
-fn codegen(path: &Path) -> Result<()> {
-    let mut parser = parser::Parser::new(path);
+fn codegen(path: &Path, real_source: &Path) -> Result<()> {
+    let mut parser = parser::Parser::new(path, real_source);
     let tackyx = parser.parse();
     match tackyx {
         Ok(tacky) => {
@@ -166,8 +171,8 @@ fn codegen(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn build(source: &Path, output: &Path, compile_only: bool) -> Result<()> {
-    let mut parser = parser::Parser::new(source);
+fn build(source: &Path, output: &Path, real_source: &Path, compile_only: bool) -> Result<()> {
+    let mut parser = parser::Parser::new(source, real_source);
     let tackyx = parser.parse();
     match tackyx {
         Ok(tacky) => {

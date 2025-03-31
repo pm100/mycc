@@ -4,7 +4,7 @@ use enum_as_inner::EnumAsInner;
 use std::{
     collections::{HashMap, VecDeque},
     mem::discriminant,
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 // https://users.rust-lang.org/t/how-to-parameterize-a-function-or-macro-by-enum-variant/126398
@@ -18,7 +18,17 @@ macro_rules! expect {
         }
     };
 }
-
+// macro_rules! fatal {
+//     ($msg:literal $(,)?) => {
+//         let message = format!(
+//             "{}:{} {}",
+//             self.lexer.file.display(),
+//             self.lexer.current_line_number,
+//             $msg
+//         );
+//         bail!(message);
+//     };
+// }
 use crate::{
     lexer::{Lexer, Token},
     tacky::{BinaryOperator, Instruction, TackyProgram, Value},
@@ -99,6 +109,7 @@ struct Extern {
 }
 pub struct Parser {
     lexer: Lexer,
+    source_file: PathBuf,
     tacky: TackyProgram,
     next_temporary: usize,
     eof_hit: bool,
@@ -118,9 +129,10 @@ pub struct Parser {
 }
 
 impl Parser {
-    pub fn new(path: &Path) -> Self {
+    pub fn new(path: &Path, real_source: &Path) -> Self {
         Self {
             lexer: Lexer::new(path),
+            source_file: real_source.to_path_buf(),
             tacky: TackyProgram::new(),
             next_temporary: 0,
             eof_hit: false,
@@ -138,7 +150,14 @@ impl Parser {
             externs: HashMap::new(),
         }
     }
-
+    pub(crate) fn cc_fatal_error(&self, msg: &str) {
+        let message = format!(
+            "{}:{} {}",
+            self.lexer.file.display(),
+            self.lexer.current_line_number,
+            msg
+        );
+    }
     pub fn parse(&mut self) -> Result<&TackyProgram> {
         self.do_program()?;
         Ok(&self.tacky)
@@ -153,7 +172,21 @@ impl Parser {
             // but we cant tell easily which is which
             // so a common routine parses both
 
-            self.do_function_or_variable(true, true)?;
+            match self.do_function_or_variable(true, true) {
+                Ok(true) => {}
+                Ok(false) => {
+                    // its a statement, thats an error here
+                }
+                Err(e) => {
+                    let message = format!(
+                        "{}:{} {}",
+                        self.source_file.display(),
+                        self.lexer.current_line_number,
+                        e
+                    );
+                    bail!(message);
+                }
+            }
         }
         for ext in self.externs.values() {
             //  if ext.linkage != SymbolLinkage::None {
@@ -185,7 +218,7 @@ impl Parser {
                         self.next_token()?;
                         specifiers.push(Specifier::Type(SymbolType::Int));
                     }
-    
+
                     Token::Extern => {
                         self.next_token()?;
                         specifiers.push(Specifier::Extern);
@@ -254,7 +287,6 @@ impl Parser {
         self.expect(Token::LeftParen)?;
 
         let mut arg_names = Vec::new();
-  
 
         loop {
             let token = self.next_token()?;
@@ -376,7 +408,6 @@ impl Parser {
                         bail!("Function {} already declared as variable1", name);
                     }
                     true
-                 
                 }
                 _ => {
                     if top {
@@ -442,7 +473,7 @@ impl Parser {
             let symbol = Symbol {
                 name: arg.clone(),
                 state: SymbolState::Defined,
-                linkage: SymbolLinkage::None, 
+                linkage: SymbolLinkage::None,
                 details: SymbolDetails::Variable {
                     rename: new_name.to_string(),
                     stype: SymbolType::Int,
@@ -462,8 +493,6 @@ impl Parser {
     }
 
     fn do_function_body(&mut self) -> Result<()> {
-
-
         self.do_block()?;
         if self.labels.iter().any(|l| !l.1) {
             bail!("Undefined label");
@@ -480,7 +509,7 @@ impl Parser {
         self.pop_var_map();
         self.pop_symbols();
         self.expect(Token::RightBrace)?;
- 
+
         Ok(())
     }
     fn do_block_item(&mut self) -> Result<()> {
@@ -637,13 +666,10 @@ impl Parser {
             {
                 bail!("Variable {} already declared as external function", name);
             }
-            if symbol.state == SymbolState::Defined && top && !explicit_external
-      
-            {
+            if symbol.state == SymbolState::Defined && top && !explicit_external {
                 bail!("Variable {} already defined {:?}", name, symbol);
             }
             if symbol.linkage != linkage && top && symbol.linkage != SymbolLinkage::Internal {
-             
                 bail!("Variable {} linkage mismatch", name);
             }
 
@@ -744,7 +770,7 @@ impl Parser {
                 self.dump_symbols();
                 new_sym.clone()
             }
-          
+
             (Some(symbol), _) => {
                 symbol.state = SymbolState::Declared;
                 symbol.clone()
@@ -771,14 +797,10 @@ impl Parser {
                             stype: SymbolType::Int,
                         });
                 }
-           
             } else {
                 bail!("Static variable must be initialized to a constant");
             }
-        } else if !is_auto
-    
-        {
-          
+        } else if !is_auto {
             self.externs
                 .entry(rename.to_string())
                 .and_modify(|e| {
@@ -793,7 +815,6 @@ impl Parser {
                     value: None,
                     stype: SymbolType::Int,
                 });
-
         }
         self.dump_symbols();
 
@@ -997,7 +1018,6 @@ impl Parser {
         let label = self.gen_label(&label);
         self.expect(Token::Colon)?;
         self.instruction(Instruction::Label(label.clone()));
-
 
         let mut dup = false;
         self.labels
@@ -1221,7 +1241,6 @@ impl Parser {
             self.eof_hit = true;
         }
 
-
         Ok(token)
     }
     fn dump_var_map(&self) {
@@ -1341,6 +1360,4 @@ impl Parser {
             .nth(1 + level as usize)
             .cloned()
     }
-
-
 }

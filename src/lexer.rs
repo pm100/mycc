@@ -2,9 +2,10 @@ use anyhow::{bail, Result};
 
 pub struct Lexer {
     reader: LineReader,
-    current_line: String,
-    current_pos: usize,
-    current_line_number: usize,
+    pub file: PathBuf,
+    pub current_line: String,
+    pub current_pos: usize,
+    pub current_line_number: usize,
     chars: Vec<char>,
 }
 #[derive(Debug, PartialEq, Clone)]
@@ -88,6 +89,7 @@ impl Lexer {
         let reader = LineReader::open(path).unwrap();
         Self {
             reader,
+            file: path.to_path_buf(),
             current_line: String::new(),
             current_pos: 0,
             current_line_number: 0,
@@ -345,7 +347,7 @@ use core::panic;
 use std::{
     fs::File,
     io::{self, prelude::*},
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 struct LineReader {
