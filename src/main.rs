@@ -16,6 +16,8 @@ use crate::codegen::MoiraGenerator;
 use crate::x64::nasmgen::X64CodeGenerator;
 use anyhow::Result;
 use codegen::MoiraCompiler;
+use std::env;
+
 use x64::moiragen::X64MoiraGenerator;
 
 use std::path::{Path, PathBuf};
@@ -49,6 +51,27 @@ fn main() -> ExitCode {
     // eprintln!("validate: {:?}", cli.validate);
     // eprintln!("source: {:?}", &cli.source);
     // eprintln!("compile_only: {:?}", cli.compile_only);
+
+    if env::var("USE_MSVC").is_ok() {
+        let source = cli.source.display().to_string().replace("/", "\\");
+        let source = PathBuf::from(source);
+        println!("source: {:?}", &source);
+        let output = if cli.compile_only {
+            source.with_extension("obj")
+        } else {
+            source.with_extension("exe")
+        };
+
+        match cpp::assemble_link_msvc(&source, &output, cli.compile_only) {
+            Ok(()) => {
+                return ExitCode::SUCCESS;
+            }
+            Err(e) => {
+                eprintln!("build error {:?}", e);
+                return ExitCode::FAILURE;
+            }
+        }
+    }
 
     let stub = "mycc_cpp";
     //uuid::Uuid::new_v4()

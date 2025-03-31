@@ -209,3 +209,27 @@ pub fn assemble_link(source: &Path, output: &Path, compile_only: bool) -> Result
 
     comp.assemble_link(source, output, compile_only)
 }
+
+pub fn assemble_link_msvc(source: &Path, output: &Path, compile_only: bool) -> Result<()> {
+    let comp = COMPILER.as_ref().unwrap();
+
+    let args = if compile_only {
+        vec![
+            format!("/Fo{}", output.with_extension("obj").display()),
+            "/c".to_string(),
+        ]
+    } else {
+        vec![format!("/Fe{}", output.display())]
+    };
+    //   println!("msvc_asm: {:?} {:?} {:?} {:?}", path, source, dest, args);
+    capture({
+        Command::new("cl")
+            .args(args)
+            .arg(source)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?
+    })?;
+    Ok(())
+}
