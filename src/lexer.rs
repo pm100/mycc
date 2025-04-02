@@ -24,6 +24,7 @@ pub enum Token {
     // basics
     Identifier(String),
     Constant(i32),
+    LongConstant(i64),
 
     // operators
     Complement, // ~
@@ -66,6 +67,7 @@ pub enum Token {
     // keywords
     Int,
     Void,
+    Long,
     Return,
     If,
     Else,
@@ -306,7 +308,19 @@ impl Lexer {
         while self.peek().is_ascii_digit() {
             self.advance();
         }
-        Token::Constant(self.current_line[start..self.current_pos].parse().unwrap())
+        let mut val: i128 = self.current_line[start..self.current_pos].parse().unwrap();
+        if self.peek() == 'l' || self.peek() == 'L' {
+            if val > i64::MAX as i128 {
+                val = val & 0xffffffffFFFFFFFF;
+            }
+            self.advance();
+            Token::LongConstant(val as i64)
+        } else {
+            if val > i32::MAX as i128 {
+                val = val & 0xFFFFFFFF;
+            }
+            Token::Constant(val as i32)
+        }
     }
     fn advance(&mut self) -> char {
         let c = self.chars[self.current_pos];

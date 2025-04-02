@@ -16,6 +16,8 @@ pub enum Instruction {
     JumpIfNotZero(Value, String),
     Label(String),
     FunCall(String, Vec<Value>, Value),
+    SignExtend(Value, Value),
+    Truncate(Value, Value),
 }
 #[derive(Debug)]
 
@@ -48,10 +50,10 @@ pub enum BinaryOperator {
 
 pub enum Value {
     Int(i32),
+    Long(i64),
     Variable(String),
 }
 #[derive(Debug)]
-
 pub struct Function {
     pub name: String,
     pub parameters: Vec<String>,
@@ -59,9 +61,15 @@ pub struct Function {
     pub global: bool,
 }
 #[derive(Debug)]
+enum TackyType {
+    Int,
+    Long,
+    Func,
+}
+#[derive(Debug)]
 pub struct StaticVariable {
     pub name: String,
-
+    pub stype: TackyType,
     pub global: bool,
     pub external: bool,
     pub value: Option<Value>,
@@ -91,6 +99,7 @@ impl TackyProgram {
             name.to_string(),
             StaticVariable {
                 name: name.to_string(),
+                stype: TackyType::Int,
                 value,
                 global,
                 external,
@@ -158,6 +167,7 @@ impl TackyProgram {
                     Instruction::FunCall(name, args, dest) => {
                         println!("      FunCall {:?} {:?} {:?}", name, args, dest);
                     }
+                    _ => todo!(),
                 }
             }
         }

@@ -2,7 +2,7 @@ use anyhow::{bail, Result};
 use backtrace::{Backtrace, BacktraceFrame, BacktraceSymbol};
 use enum_as_inner::EnumAsInner;
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     mem::discriminant,
     path::{Path, PathBuf},
 };
@@ -208,31 +208,38 @@ impl Parser {
         // this is a statment => false
 
         // scan the specifiers first
-        let specifiers = {
-            let mut specifiers = Vec::new();
-            loop {
-                let token = self.peek()?;
+        let mut already = HashSet::new();
+        // let specifiers = {
+        let mut specifiers = Vec::new();
+        loop {
+            let token = self.peek()?;
 
-                match token {
-                    Token::Int => {
-                        self.next_token()?;
-                        specifiers.push(Specifier::Type(SymbolType::Int));
-                    }
-
-                    Token::Extern => {
-                        self.next_token()?;
-                        specifiers.push(Specifier::Extern);
-                    }
-                    Token::Static => {
-                        self.next_token()?;
-                        specifiers.push(Specifier::Static);
-                    }
-                    _ => {
-                        break specifiers;
-                    }
+            let specifier = match token {
+                Token::Int => {
+                    self.next_token()?;
+                    Specifier::Type(SymbolType::Int)
+                    //   specifiers.insert(Specifier::Type(SymbolType::Int));
                 }
+
+                Token::Extern => {
+                    self.next_token()?;
+                    Specifier::Extern
+                }
+                Token::Static => {
+                    self.next_token()?;
+                    Specifier::Static
+                }
+                _ => {
+                    break;
+                    //specifiers;
+                }
+            };
+            if !already.insert(format!("{:?}", token)) {
+                bail!("already");
             }
-        };
+            specifiers.push(specifier);
+        }
+        //  };
 
         if specifiers.is_empty() {
             // its a statement, only allowed in functions

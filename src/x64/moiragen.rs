@@ -162,6 +162,7 @@ impl X64MoiraGenerator {
                 self.moira(Instruction::DeallocateStack(stack_delta));
                 self.moira(Instruction::Mov(Operand::Register(Register::AX), dest));
             }
+            _ => todo!(),
         }
         Ok(())
     }
@@ -253,6 +254,7 @@ impl X64MoiraGenerator {
                     Operand::Pseudo(register.clone())
                 }
             }
+            tacky::Value::Long(value) => todo!(), //Operand::Immediate(*value as i32),
         }
     }
 }
