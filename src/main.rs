@@ -117,11 +117,11 @@ fn main() -> ExitCode {
     cli.source.set_extension("exe");
     match build(&preproc_output, &cli.source, &cli.source, cli.compile_only) {
         Ok(()) => {
-            return ExitCode::SUCCESS;
+            ExitCode::SUCCESS
         }
         Err(e) => {
             eprintln!("build error {:?}", e);
-            return ExitCode::FAILURE;
+            ExitCode::FAILURE
         }
     }
 }

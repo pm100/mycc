@@ -1,10 +1,9 @@
-use std::{cmp::max, collections::HashMap};
+use std::cmp::max;
 
 use crate::{
     codegen::MoiraGenerator,
     moira::{MoiraProgram, StaticVariable},
-    parser::Symbol,
-    tacky::{StaticInit, SymbolType, TackyProgram},
+    tacky::{SymbolType, TackyProgram},
 };
 use anyhow::Result;
 
@@ -21,6 +20,12 @@ pub struct X64MoiraGenerator {
 //     }
 // }
 use crate::tacky;
+impl Default for X64MoiraGenerator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl X64MoiraGenerator {
     pub fn new() -> Self {
         Self {
@@ -76,7 +81,7 @@ impl X64MoiraGenerator {
         //println!("gen_instruction: {:?}", instruction);
         match instruction {
             tacky::Instruction::Return(value) => {
-                let (value, stype, assembly_type) = self.get_value(value);
+                let (value, _stype, assembly_type) = self.get_value(value);
 
                 self.moira(Instruction::Mov(
                     assembly_type,
@@ -129,7 +134,7 @@ impl X64MoiraGenerator {
                 self.moira(Instruction::Jmp(label.clone()));
             }
             tacky::Instruction::JumpIfZero(value, label) => {
-                let (value, stype, assembly_type) = self.get_value(value);
+                let (value, _stype, assembly_type) = self.get_value(value);
                 self.moira(Instruction::Cmp(
                     assembly_type.clone(),
                     Self::generate_immediate(assembly_type, 0),
@@ -138,7 +143,7 @@ impl X64MoiraGenerator {
                 self.moira(Instruction::JmpCC(CondCode::E, label.clone()));
             }
             tacky::Instruction::JumpIfNotZero(value, label) => {
-                let (value, stype, assembly_type) = self.get_value(value);
+                let (value, _stype, assembly_type) = self.get_value(value);
                 self.moira(Instruction::Cmp(
                     assembly_type.clone(),
                     Self::generate_immediate(assembly_type, 0),
@@ -150,7 +155,7 @@ impl X64MoiraGenerator {
                 self.moira(Instruction::Label(label.clone()));
             }
             tacky::Instruction::FunCall(name, args, dest) => {
-                let (dest, stype, ret_assembly_type) = self.get_value(dest);
+                let (dest, _stype, ret_assembly_type) = self.get_value(dest);
                 let reglist: [Register; 4] =
                     [Register::RCX, Register::RDX, Register::R8, Register::R9];
                 let stack_delta = max(args.len(), 4) as i32 * 8;
@@ -158,7 +163,7 @@ impl X64MoiraGenerator {
                 for idx in 0..args.len() {
                     if idx < reglist.len() {
                         let arg = &args[idx];
-                        let (argval, arg_stype, arg_assembly_type) = self.get_value(arg);
+                        let (argval, _arg_stype, arg_assembly_type) = self.get_value(arg);
                         self.moira(Instruction::Mov(
                             arg_assembly_type,
                             argval,
@@ -166,7 +171,7 @@ impl X64MoiraGenerator {
                         ));
                     } else {
                         let arg = &args[(args.len() - idx) + 3];
-                        let (argval, arg_stype, arg_assembly_type) = self.get_value(arg);
+                        let (argval, _arg_stype, arg_assembly_type) = self.get_value(arg);
                         match argval {
                             Operand::ImmediateI32(v) => {
                                 self.moira(Instruction::Push(Operand::ImmediateI32(v)))
@@ -206,18 +211,15 @@ impl X64MoiraGenerator {
             }
 
             tacky::Instruction::SignExtend(src, dest) => {
-                let (src, src_stype, _) = self.get_value(&src);
-                let (dest, dest_stype, _) = self.get_value(&dest);
-                //assert!(src_stype == dest_stype);
+                let (src, _src_stype, _) = self.get_value(src);
+                let (dest, _dest_stype, _) = self.get_value(dest);
                 self.moira(Instruction::SignExtend(src, dest));
             }
             tacky::Instruction::Truncate(src, dest) => {
-                let (src, src_stype, _) = self.get_value(&src);
-                let (dest, dest_stype, _) = self.get_value(&dest);
-                //  assert!(src_stype == dest_stype);
+                let (src, _src_stype, _) = self.get_value(src);
+                let (dest, _dest_stype, _) = self.get_value(dest);
                 self.moira(Instruction::Mov(AssemblyType::LongWord, src, dest));
-            }
-            _ => todo!(),
+            } //_ => todo!(),
         }
         Ok(())
     }
@@ -343,7 +345,7 @@ impl X64MoiraGenerator {
                 }
             }
             tacky::Value::Int64(value) => (
-                Operand::ImmediateI64(*value as i64),
+                Operand::ImmediateI64(*value),
                 SymbolType::Int64,
                 AssemblyType::QuadWord,
             ),

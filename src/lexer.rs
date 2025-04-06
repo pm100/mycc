@@ -312,19 +312,17 @@ impl Lexer {
         let mut val: i128 = self.current_line[start..self.current_pos].parse().unwrap();
         if self.peek() == 'l' || self.peek() == 'L' {
             if val > i64::MAX as i128 {
-                val = val & 0xffffffffFFFFFFFF;
+                val &= 0xFFFFFFFFFFFFFFFF;
             }
             self.advance();
             Token::LongConstant(val as i64)
-        } else {
-            if val > i32::MAX as i128 {
-                if val > i64::MAX as i128 {
-                    val = val & 0xffffffffFFFFFFFF;
-                }
-                Token::LongConstant(val as i64)
-            } else {
-                Token::Constant(val as i32)
+        } else if val > i32::MAX as i128 {
+            if val > i64::MAX as i128 {
+                val &= 0xFFFFFFFFFFFFFFFF;
             }
+            Token::LongConstant(val as i64)
+        } else {
+            Token::Constant(val as i32)
         }
     }
     fn advance(&mut self) -> char {

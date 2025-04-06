@@ -129,13 +129,13 @@ impl TackyProgram {
     pub fn add_function(
         &mut self,
         name: &str,
-        params: &Vec<(String, SymbolType)>,
+        params: &[(String, SymbolType)],
         global: bool,
         return_type: SymbolType,
     ) {
         self.functions.push(Function {
             name: name.to_string(),
-            parameters: params.clone(),
+            parameters: params.to_owned(),
             instructions: vec![],
             global,
             return_type,
@@ -156,7 +156,7 @@ impl TackyProgram {
     pub(crate) fn add_instruction(&mut self, instruction: Instruction) {
         if let Instruction::Copy(v1, v2) = &instruction {
             assert!(
-                Self::get_assembly_type(&v1) == Self::get_assembly_type(&v2),
+                Self::get_assembly_type(v1) == Self::get_assembly_type(v2),
                 "Copy instruction types do not match: {:?} {:?}",
                 v1,
                 v2
@@ -220,7 +220,6 @@ impl TackyProgram {
                     Instruction::Truncate(src, dest) => {
                         println!("      Truncate {:?} {:?}", src, dest);
                     }
-                    _ => todo!(),
                 }
             }
         }

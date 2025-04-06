@@ -237,16 +237,16 @@ impl Parser {
             match value {
                 Value::Int32(v) => {
                     if *target_type == SymbolType::Int64 {
-                        return Value::Int64(*v as i64);
+                        Value::Int64(*v as i64)
                     } else {
-                        return value.clone();
+                        value.clone()
                     }
                 }
                 Value::Int64(v) => {
                     if *target_type == SymbolType::Int32 {
-                        return Value::Int32(*v as i32);
+                        Value::Int32(*v as i32)
                     } else {
-                        return value.clone();
+                        value.clone()
                     }
                 }
                 _ => {
@@ -262,7 +262,7 @@ impl Parser {
 
                         _ => {}
                     }
-                    return dest.clone();
+                    dest.clone()
                 }
             }
         }
@@ -351,7 +351,7 @@ impl Parser {
                     let ret_dest = Value::Variable(dest_name.clone(), target_type.clone());
                     let converted = self.convert_to(&right, &target_type);
                     self.instruction(Instruction::Copy(converted, ret_dest.clone()));
-                    return Ok(ret_dest);
+                    Ok(ret_dest)
                 } else {
                     let ret = self.do_expression(0)?;
                     self.expect(Token::RightParen)?;

@@ -1,9 +1,6 @@
 use anyhow::Result;
 
-use crate::{
-    tacky::{StaticInit, SymbolType},
-    x64::moira_inst::Instruction,
-};
+use crate::tacky::{StaticInit, SymbolType};
 
 #[derive(Debug, Clone)]
 pub struct MoiraProgram<TInst> {

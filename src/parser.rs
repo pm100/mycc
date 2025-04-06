@@ -2,8 +2,7 @@ use anyhow::{bail, Result};
 use backtrace::{Backtrace, BacktraceFrame, BacktraceSymbol};
 use enum_as_inner::EnumAsInner;
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
-    convert,
+    collections::{HashMap, VecDeque},
     mem::discriminant,
     path::{Path, PathBuf},
 };
@@ -40,28 +39,11 @@ pub(crate) struct VariableName {
     pub(crate) is_current: bool,
 }
 
-// pub(crate) enum SymbolType {
-//     Int,
-//     Long, // 32 bit
-//     LongLong, // 64 bit
-//           //  Void,
-// }
-#[derive(Debug, Clone, PartialEq)]
-enum Specifier {
-    Type(SymbolType),
-    // Void,
-    Extern,
-    Static,
-}
 pub struct Specifiers {
     pub is_static: bool,
     pub is_external: bool,
     pub specified_type: Option<SymbolType>,
 }
-// pub(crate) struct ArgumentDescriptor {
-//     pub(crate) name: String,
-//     pub(crate) tipe: SymbolType,
-// }
 #[derive(Debug, Clone, PartialEq, EnumAsInner)]
 pub(crate) enum SymbolDetails {
     Function {
@@ -158,14 +140,7 @@ impl Parser {
             externs: HashMap::new(),
         }
     }
-    pub(crate) fn cc_fatal_error(&self, msg: &str) {
-        let message = format!(
-            "{}:{} {}",
-            self.lexer.file.display(),
-            self.lexer.current_line_number,
-            msg
-        );
-    }
+
     pub fn parse(&mut self) -> Result<&TackyProgram> {
         self.do_program()?;
         Ok(&self.tacky)
@@ -1098,8 +1073,7 @@ impl Parser {
         let label = expect!(self, Token::Identifier);
 
         let label = self.gen_label(&label);
-        if self.labels.get(&label).is_some() {
-        } else {
+        if !self.labels.contains_key(&label) {
             self.labels.insert(label.clone(), false);
         }
 
