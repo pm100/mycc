@@ -1,5 +1,10 @@
 use anyhow::Result;
 
+use crate::{
+    tacky::{StaticInit, SymbolType},
+    x64::moira_inst::Instruction,
+};
+
 #[derive(Debug, Clone)]
 pub struct MoiraProgram<TInst> {
     pub functions: Vec<Function<TInst>>,
@@ -15,9 +20,10 @@ pub struct Function<TInst> {
 #[derive(Debug, Clone)]
 pub struct StaticVariable {
     pub name: String,
-    pub value: i32,
+    pub value: StaticInit,
     pub global: bool,
     pub external: bool,
+    pub stype: SymbolType,
 }
 impl<TInst> Default for MoiraProgram<TInst>
 where
@@ -41,7 +47,6 @@ where
     }
 
     pub fn gen_function(&mut self, func: &crate::tacky::Function) -> Result<()> {
-
         self.functions.push(Function {
             name: func.name.to_string(),
             instructions: Vec::new(),
@@ -52,7 +57,7 @@ where
     }
 
     pub(crate) fn add_instruction(&mut self, instruction: TInst) {
-    
+        //  if let Instruction::Mov(a, o1, o2) = instruction {}
         self.functions[self.current_function]
             .instructions
             .push(instruction);
@@ -62,7 +67,7 @@ where
         println!("Dumping MoiraProgram");
         for top_var in self.top_vars.iter() {
             println!(
-                "TopVar: {} = {} Ext {}",
+                "TopVar: {} = {:?} Ext {}",
                 top_var.name, top_var.value, top_var.external
             );
         }

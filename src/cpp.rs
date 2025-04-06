@@ -126,6 +126,7 @@ impl Compiler {
         capture({
             Command::new(path)
                 .args(["/EP", "/P", format!("/Fi{}", dest.display()).as_str()])
+                .arg("/DLONG64=long long")
                 .arg(source)
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())

@@ -1,5 +1,9 @@
 use std::collections::HashMap;
 
+use enum_as_inner::EnumAsInner;
+
+use crate::x64::moira_inst::AssemblyType;
+
 pub struct TackyProgram {
     pub functions: Vec<Function>,
     pub static_variables: HashMap<String, StaticVariable>,
@@ -26,7 +30,7 @@ pub enum UnaryOperator {
     Complement,
     LogicalNot,
 }
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum BinaryOperator {
     Add,
     Subtract,
@@ -46,33 +50,41 @@ pub enum BinaryOperator {
     GreaterThan,
     GreaterThanOrEqual,
 }
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, EnumAsInner)]
 
 pub enum Value {
-    Int(i32),
-    Long(i64),
-    Variable(String),
+    Int32(i32),
+    Int64(i64),
+    Variable(String, SymbolType),
 }
 #[derive(Debug)]
 pub struct Function {
     pub name: String,
-    pub parameters: Vec<String>,
+    pub parameters: Vec<(String, SymbolType)>,
+    pub return_type: SymbolType,
     pub instructions: Vec<Instruction>,
     pub global: bool,
 }
-#[derive(Debug)]
-enum TackyType {
-    Int,
-    Long,
-    Func,
+#[derive(Debug, Clone, PartialEq)]
+pub enum SymbolType {
+    Int32,
+    Int64,
+    //LongLong,
+    Func(Vec<SymbolType>),
+}
+#[derive(Debug, Clone, PartialEq)]
+pub enum StaticInit {
+    InitI32(i32),
+    InitI64(i64),
+    InitNone,
 }
 #[derive(Debug)]
 pub struct StaticVariable {
     pub name: String,
-    pub stype: TackyType,
+    pub stype: SymbolType,
     pub global: bool,
     pub external: bool,
-    pub value: Option<Value>,
+    pub init: StaticInit,
 }
 impl Default for TackyProgram {
     fn default() -> Self {
@@ -94,29 +106,62 @@ impl TackyProgram {
         value: Option<Value>,
         global: bool,
         external: bool,
+        stype: &SymbolType,
     ) -> Option<StaticVariable> {
+        let init = match value {
+            Some(Value::Int32(v)) => StaticInit::InitI32(v),
+            Some(Value::Int64(v)) => StaticInit::InitI64(v),
+            None => StaticInit::InitNone,
+            _ => panic!("Invalid static variable type"),
+        };
+
         self.static_variables.insert(
             name.to_string(),
             StaticVariable {
                 name: name.to_string(),
-                stype: TackyType::Int,
-                value,
+                stype: stype.clone(),
+                init,
                 global,
                 external,
             },
         )
     }
-    pub fn add_function(&mut self, name: &str, params: &Vec<String>, global: bool) {
+    pub fn add_function(
+        &mut self,
+        name: &str,
+        params: &Vec<(String, SymbolType)>,
+        global: bool,
+        return_type: SymbolType,
+    ) {
         self.functions.push(Function {
             name: name.to_string(),
             parameters: params.clone(),
             instructions: vec![],
             global,
+            return_type,
         });
         self.current_function = self.functions.len() - 1;
     }
-
+    fn get_assembly_type(value: &Value) -> AssemblyType {
+        match value {
+            Value::Int32(_) => AssemblyType::LongWord,
+            Value::Int64(_) => AssemblyType::QuadWord,
+            Value::Variable(_, stype) => match stype {
+                SymbolType::Int32 => AssemblyType::LongWord,
+                SymbolType::Int64 => AssemblyType::QuadWord,
+                SymbolType::Func(_) => AssemblyType::QuadWord, // TODO
+            },
+        }
+    }
     pub(crate) fn add_instruction(&mut self, instruction: Instruction) {
+        if let Instruction::Copy(v1, v2) = &instruction {
+            assert!(
+                Self::get_assembly_type(&v1) == Self::get_assembly_type(&v2),
+                "Copy instruction types do not match: {:?} {:?}",
+                v1,
+                v2
+            );
+        }
         self.functions[self.current_function]
             .instructions
             .push(instruction);
@@ -126,17 +171,18 @@ impl TackyProgram {
         println!("Dumping TackyProgram");
         for static_variable in self.static_variables.values() {
             println!(
-                "Static Variable: {} = {:?} Global: {} External: {}",
+                "Static Variable: {} = {:?} Global: {} External: {} Stype: {:?}",
                 static_variable.name,
-                static_variable.value,
+                static_variable.init,
                 static_variable.global,
-                static_variable.external
+                static_variable.external,
+                static_variable.stype
             );
         }
         for function in &self.functions {
             println!(
-                "Function: {} {:?} global:{}",
-                function.name, function.parameters, function.global
+                "Function: {:?} {}({:?}) global:{}",
+                function.return_type, function.name, function.parameters, function.global
             );
             for instruction in &function.instructions {
                 match instruction {
@@ -166,6 +212,13 @@ impl TackyProgram {
                     }
                     Instruction::FunCall(name, args, dest) => {
                         println!("      FunCall {:?} {:?} {:?}", name, args, dest);
+                    }
+
+                    Instruction::SignExtend(src, dest) => {
+                        println!("      SignExtend {:?} {:?}", src, dest);
+                    }
+                    Instruction::Truncate(src, dest) => {
+                        println!("      Truncate {:?} {:?}", src, dest);
                     }
                     _ => todo!(),
                 }

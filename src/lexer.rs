@@ -299,6 +299,7 @@ impl Lexer {
             "switch" => Token::Switch,
             "extern" => Token::Extern,
             "static" => Token::Static,
+            "long" => Token::Long,
 
             _ => Token::Identifier(s.to_string()),
         }
@@ -317,9 +318,13 @@ impl Lexer {
             Token::LongConstant(val as i64)
         } else {
             if val > i32::MAX as i128 {
-                val = val & 0xFFFFFFFF;
+                if val > i64::MAX as i128 {
+                    val = val & 0xffffffffFFFFFFFF;
+                }
+                Token::LongConstant(val as i64)
+            } else {
+                Token::Constant(val as i32)
             }
-            Token::Constant(val as i32)
         }
     }
     fn advance(&mut self) -> char {

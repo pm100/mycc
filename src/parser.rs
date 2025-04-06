@@ -3,6 +3,7 @@ use backtrace::{Backtrace, BacktraceFrame, BacktraceSymbol};
 use enum_as_inner::EnumAsInner;
 use std::{
     collections::{HashMap, HashSet, VecDeque},
+    convert,
     mem::discriminant,
     path::{Path, PathBuf},
 };
@@ -31,24 +32,31 @@ macro_rules! expect {
 // }
 use crate::{
     lexer::{Lexer, Token},
-    tacky::{BinaryOperator, Instruction, TackyProgram, Value},
+    tacky::{BinaryOperator, Instruction, SymbolType, TackyProgram, Value},
 };
 #[derive(Debug, Clone)]
 pub(crate) struct VariableName {
     pub(crate) name: String,
     pub(crate) is_current: bool,
 }
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) enum SymbolType {
-    Int,
-    //  Void,
-}
+
+// pub(crate) enum SymbolType {
+//     Int,
+//     Long, // 32 bit
+//     LongLong, // 64 bit
+//           //  Void,
+// }
 #[derive(Debug, Clone, PartialEq)]
 enum Specifier {
     Type(SymbolType),
     // Void,
     Extern,
     Static,
+}
+pub struct Specifiers {
+    pub is_static: bool,
+    pub is_external: bool,
+    pub specified_type: Option<SymbolType>,
 }
 // pub(crate) struct ArgumentDescriptor {
 //     pub(crate) name: String,
@@ -64,7 +72,7 @@ pub(crate) enum SymbolDetails {
     Variable {
         rename: String,
         stype: SymbolType,
-        value: Option<Value>,
+        value: Option<Value>, //TODO - remove this
     },
     ScopePull,
 }
@@ -195,11 +203,78 @@ impl Parser {
                 ext.value.clone(),
                 ext.linkage == SymbolLinkage::External,
                 ext.state == SymbolState::Declared,
+                &ext.stype,
             );
             //  }
         }
 
         Ok(())
+    }
+
+    pub fn load_specifiers(&mut self) -> Result<Specifiers> {
+        let mut specifiers = Specifiers {
+            is_static: false,
+            is_external: false,
+            specified_type: None, // SymbolType::Int,
+        };
+        let mut long_count = 0;
+        let mut int_count = 0;
+        loop {
+            let token = self.peek()?;
+            match token {
+                Token::Int => {
+                    self.next_token()?;
+                    int_count += 1;
+                }
+                Token::Long => {
+                    if long_count > 0 {
+                        bail!("Duplicate long specifier");
+                    }
+                    long_count += 1;
+                    self.next_token()?;
+                    loop {
+                        let token = self.peek()?;
+                        if token == Token::Long {
+                            self.next_token()?;
+                            long_count += 1;
+                        } else {
+                            break;
+                        }
+                    }
+                }
+                Token::Void => {
+                    self.next_token()?;
+                    if specifiers.specified_type.is_some() {
+                        bail!("Duplicate void specifier");
+                    }
+                }
+                Token::Extern => {
+                    self.next_token()?;
+                    if specifiers.is_external {
+                        bail!("Duplicate extern specifier");
+                    }
+                    specifiers.is_external = true;
+                }
+                Token::Static => {
+                    self.next_token()?;
+                    if specifiers.is_static {
+                        bail!("Duplicate static specifier");
+                    }
+                    specifiers.is_static = true;
+                }
+                _ => break,
+            };
+        }
+        match (long_count, int_count) {
+            (0, 0) => specifiers.specified_type = None,
+            (1, 1) => specifiers.specified_type = Some(SymbolType::Int32),
+            (1, 0) => specifiers.specified_type = Some(SymbolType::Int32),
+            (2, 0) => specifiers.specified_type = Some(SymbolType::Int64),
+            (2, 1) => specifiers.specified_type = Some(SymbolType::Int64),
+            (0, 1) => specifiers.specified_type = Some(SymbolType::Int32),
+            _ => bail!("Invalid type specifier"),
+        }
+        Ok(specifiers)
     }
     fn do_function_or_variable(&mut self, func_allowed: bool, body_allowed: bool) -> Result<bool> {
         // three possible normal outcomes
@@ -208,48 +283,23 @@ impl Parser {
         // this is a statment => false
 
         // scan the specifiers first
-        let mut already = HashSet::new();
-        // let specifiers = {
-        let mut specifiers = Vec::new();
-        loop {
-            let token = self.peek()?;
+        let specifiers = self.load_specifiers()?;
 
-            let specifier = match token {
-                Token::Int => {
-                    self.next_token()?;
-                    Specifier::Type(SymbolType::Int)
-                    //   specifiers.insert(Specifier::Type(SymbolType::Int));
-                }
-
-                Token::Extern => {
-                    self.next_token()?;
-                    Specifier::Extern
-                }
-                Token::Static => {
-                    self.next_token()?;
-                    Specifier::Static
-                }
-                _ => {
-                    break;
-                    //specifiers;
-                }
-            };
-            if !already.insert(format!("{:?}", token)) {
-                bail!("already");
-            }
-            specifiers.push(specifier);
-        }
-        //  };
-
-        if specifiers.is_empty() {
+        if !specifiers.is_static && !specifiers.is_external && specifiers.specified_type.is_none() {
             // its a statement, only allowed in functions
             if !self.in_function_body {
                 bail!("expected function or variable");
             }
             return Ok(false);
         }
+        if !func_allowed && (specifiers.is_external || specifiers.is_static) {
+            bail!("static or external not allowed here");
+        }
         let func_dec_name = expect!(self, Token::Identifier);
         println!("Function or dec: {}", func_dec_name);
+        if specifiers.specified_type.is_none() {
+            bail!("type not specified for {}", func_dec_name);
+        }
 
         // if next token is "(" then its a function, otherwise its a variable
         let token = self.peek()?;
@@ -266,14 +316,14 @@ impl Parser {
     fn do_function(
         &mut self,
         name: &str,
-        specifiers: &Vec<Specifier>,
+        specifiers: &Specifiers,
         body_allowed: bool,
     ) -> Result<()> {
-        let explicit_external = specifiers.contains(&Specifier::Extern);
+        let explicit_external = specifiers.is_external;
         // table 10.2
         let mut linkage = match (
-            specifiers.contains(&Specifier::Extern),
-            specifiers.contains(&Specifier::Static),
+            specifiers.is_external,
+            specifiers.is_static,
             self.in_function_body,
         ) {
             (true, true, _) => bail!("Function cannot be both extern and static"),
@@ -285,39 +335,43 @@ impl Parser {
             (false, false, true) => SymbolLinkage::External,
         };
         self.current_function_name = name.to_string();
-
+        let return_type = specifiers.specified_type.as_ref().unwrap().clone();
         let mut symbol_det = SymbolDetails::Function {
-            return_type: SymbolType::Int, // always at the moment
+            return_type: return_type.clone(),
             args: Vec::new(),
         };
         let arg_types = &mut symbol_det.as_function_mut().unwrap().1;
         self.expect(Token::LeftParen)?;
 
-        let mut arg_names = Vec::new();
+        let mut arg_names_and_types: Vec<(String, SymbolType)> = Vec::new();
+        //let mut arg_types = Vec::new();
 
         loop {
-            let token = self.next_token()?;
+            let token = self.peek()?;
             if token == Token::RightParen {
+                self.next_token()?;
                 break;
             }
 
-            match token {
-                Token::Int => {
-                    arg_types.push(SymbolType::Int);
-                }
-                Token::Void => {
-                    self.expect(Token::RightParen)?;
-                    break;
-                }
-                _ => bail!("Expected Int or Void, got {:?}", token),
+            let arg_specifiers = self.load_specifiers()?;
+            if arg_specifiers.is_static || arg_specifiers.is_external {
+                bail!("Function argument cannot be static or external");
             }
-
+            if arg_specifiers.specified_type.is_none() {
+                //  bail!("Function argument type not specified");
+                // void
+                self.next_token()?;
+                break;
+            }
             let token = self.peek()?;
             if let Token::Identifier(name) = token {
-                if arg_names.contains(&name) {
+                let arg_type = arg_specifiers.specified_type.as_ref().unwrap().clone();
+                if arg_names_and_types.iter().any(|(n, _)| *n == name) {
                     bail!("Duplicate argument name {}", name);
                 }
-                arg_names.push(name);
+                arg_names_and_types.push((name.to_string(), arg_type.clone()));
+
+                arg_types.push(arg_type);
                 self.next_token()?;
             }
             let token = self.next_token()?;
@@ -378,7 +432,7 @@ impl Parser {
             match &found.details {
                 SymbolDetails::Function { return_type, args } => {
                     // we know this function already exists, so check the args and return type
-                    if *return_type != SymbolType::Int {
+                    if *return_type != SymbolType::Int32 {
                         bail!(
                             "Function {} already declared with different return type",
                             name
@@ -467,31 +521,36 @@ impl Parser {
         self.local_variables.push(HashMap::new());
         self.in_function_body = true;
         self.push_symbols();
-        for arg in arg_names {
-            let new_name = self.make_newname(&arg);
-            new_names.push(new_name.clone());
+        for (arg_name, arg_type) in arg_names_and_types {
+            let new_name = self.make_newname(&arg_name);
+            new_names.push((new_name.clone(), arg_type.clone()));
             self.local_variables().insert(
-                arg.clone(),
+                arg_name.to_string(),
                 VariableName {
                     name: new_name.clone(),
                     is_current: true,
                 },
             );
             let symbol = Symbol {
-                name: arg.clone(),
+                name: arg_name.to_string(),
                 state: SymbolState::Defined,
                 linkage: SymbolLinkage::None,
                 details: SymbolDetails::Variable {
                     rename: new_name.to_string(),
-                    stype: SymbolType::Int,
+                    stype: arg_type.clone(),
                     value: None,
                 },
                 explicit_external,
             };
-            self.insert_symbol(&arg, symbol);
+            self.insert_symbol(&arg_name, symbol);
         }
-        self.tacky
-            .add_function(name, &new_names, linkage == SymbolLinkage::External);
+
+        self.tacky.add_function(
+            name,
+            &new_names,
+            linkage == SymbolLinkage::External,
+            return_type,
+        );
 
         self.do_function_body()?;
         self.in_function_body = false;
@@ -504,7 +563,7 @@ impl Parser {
         if self.labels.iter().any(|l| !l.1) {
             bail!("Undefined label");
         }
-        self.instruction(Instruction::Return(Value::Int(0)));
+        self.instruction(Instruction::Return(Value::Int32(0)));
         Ok(())
     }
     fn do_block(&mut self) -> Result<()> {
@@ -527,14 +586,15 @@ impl Parser {
         Ok(())
     }
 
-    fn do_variable_dec(&mut self, name: &str, specifiers: &Vec<Specifier>) -> Result<()> {
-        let token = self.peek()?;
-        let spec_ext = specifiers.contains(&Specifier::Extern);
-        let spec_static = specifiers.contains(&Specifier::Static);
+    fn do_variable_dec(&mut self, name: &str, specifiers: &Specifiers) -> Result<()> {
+        let spec_ext = specifiers.is_external;
+        let spec_static = specifiers.is_static;
         let explicit_external = spec_ext;
-        if !specifiers.iter().any(|f| matches!(f, Specifier::Type(_))) {
+        if specifiers.specified_type.is_none() {
             bail!("missing type");
         }
+        let symbol_type = specifiers.specified_type.clone().unwrap().clone();
+        let token = self.peek()?;
         let init = if token == Token::Equals {
             self.next_token()?;
             true
@@ -600,6 +660,7 @@ impl Parser {
                     is_current: true,
                 },
             );
+
             new_name
         } else {
             name.to_string()
@@ -679,7 +740,24 @@ impl Parser {
             if symbol.linkage != linkage && top && symbol.linkage != SymbolLinkage::Internal {
                 bail!("Variable {} linkage mismatch", name);
             }
-
+            if let SymbolDetails::Variable {
+                rename: _,
+                ref stype,
+                ref value,
+            } = symbol.details
+            {
+                if *stype != symbol_type {
+                    bail!(
+                        "Variable {} type mismatch {:?} {:?}",
+                        name,
+                        stype,
+                        symbol_type
+                    );
+                }
+                if value.is_some() && init {
+                    bail!("Variable {} already initialized", name);
+                }
+            }
             (Some(symbol), top)
         } else {
             (None, false)
@@ -699,7 +777,7 @@ impl Parser {
                     linkage: linkage.clone(),
                     details: SymbolDetails::Variable {
                         rename: rename.to_string(),
-                        stype: SymbolType::Int,
+                        stype: symbol_type.clone(),
                         value: None,
                     },
                     explicit_external,
@@ -737,7 +815,7 @@ impl Parser {
                             linkage: linkage.clone(),
                             details: SymbolDetails::Variable {
                                 rename: rename.to_string(),
-                                stype: SymbolType::Int,
+                                stype: symbol_type.clone(),
                                 value: None,
                             },
                             explicit_external,
@@ -768,7 +846,7 @@ impl Parser {
                     linkage: linkage.clone(),
                     details: SymbolDetails::Variable {
                         rename: rename.clone(),
-                        stype: SymbolType::Int,
+                        stype: symbol_type.clone(),
                         value: None,
                     },
                     explicit_external,
@@ -787,8 +865,16 @@ impl Parser {
         if init {
             let val = self.do_expression(0)?;
             if self.in_function_body && is_auto {
-                self.instruction(Instruction::Copy(val, Value::Variable(rename)));
-            } else if let Value::Int(_) = val {
+                //
+                let converted = self.convert_to(&val, &symbol_type);
+                self.instruction(Instruction::Copy(
+                    converted,
+                    Value::Variable(rename, symbol_type),
+                ));
+            } else {
+                if val.is_variable() {
+                    bail!("Static variable must be initialized to a constant");
+                }
                 if !is_auto {
                     self.externs
                         .entry(rename.to_string())
@@ -801,11 +887,9 @@ impl Parser {
                             linkage: linkage.clone(),
                             state: SymbolState::Defined,
                             value: Some(val),
-                            stype: SymbolType::Int,
+                            stype: symbol_type.clone(),
                         });
                 }
-            } else {
-                bail!("Static variable must be initialized to a constant");
             }
         } else if !is_auto {
             self.externs
@@ -820,7 +904,7 @@ impl Parser {
                     linkage: linkage.clone(),
                     state, //SymbolState::Defined,
                     value: None,
-                    stype: SymbolType::Int,
+                    stype: symbol_type.clone(),
                 });
         }
         self.dump_symbols();
@@ -882,25 +966,36 @@ impl Parser {
         let token = self.peek()?;
 
         // init clause?
-        match token {
-            Token::Int => {
-                // eats the semi colon
-                self.do_function_or_variable(false, false)?;
-            }
-            Token::SemiColon => {
-                self.next_token()?;
-            }
-            _ => {
+        //match token {
+        // Token::Int => {
+        //     // eats the semi colon
+        //     self.do_function_or_variable(false, false)?;
+        // }
+        // Token::SemiColon => {
+        //     self.next_token()?;
+        // }
+        // _ => {
+        //     self.do_expression(0)?;
+        //     self.expect(Token::SemiColon)?;
+        // }
+        if token != Token::SemiColon {
+            let is_dec = self.do_function_or_variable(false, false)?;
+            if is_dec {
+            } else {
+                // bail!("Expected variable declaration or expression");
                 self.do_expression(0)?;
                 self.expect(Token::SemiColon)?;
             }
+        } else {
+            self.next_token()?;
         }
+        //}
         // ==================== START:
         // condition clause
         self.instruction(Instruction::Label(label_start.clone()));
         let token = self.peek()?;
         let cond = if token == Token::SemiColon {
-            Value::Int(1)
+            Value::Int32(1)
         } else {
             self.do_expression(0)?
         };
@@ -1014,8 +1109,13 @@ impl Parser {
     }
     fn do_return(&mut self) -> Result<()> {
         self.next_token()?;
+        let func_name = &self.current_function_name;
+        let func_sym = self.lookup_global_symbol(func_name).unwrap();
+        let ret_type = func_sym.0.details.as_function().unwrap().0.clone();
+
         let val = self.do_expression(0)?;
-        self.instruction(Instruction::Return(val));
+        let converted_val = self.convert_to(&val, &ret_type);
+        self.instruction(Instruction::Return(converted_val));
         self.expect(Token::SemiColon)?;
 
         Ok(())
@@ -1131,9 +1231,10 @@ impl Parser {
 
         let case_value = if is_case {
             let cv = self.do_expression(0)?;
-            if !matches!(cv, Value::Int(_)) {
+            if !matches!(cv, Value::Int32(_)) && !matches!(cv, Value::Int64(_)) {
                 bail!("Switch value must be an integer");
             }
+
             Some(cv)
         } else {
             None
@@ -1145,12 +1246,12 @@ impl Parser {
         let (switch_value, this_case_label, this_drop_thru_label) =
             if let Some(context) = self.switch_context_stack.last_mut() {
                 // check for duplicate case values
-                if let Some(ref cv) = case_value {
-                    if context.cases.contains(cv) {
-                        bail!("Duplicate case value");
-                    }
-                    context.cases.push(cv.clone());
-                }
+                // if let Some(ref cv) = case_value {
+                //     if context.cases.contains(cv) {
+                //         bail!("Duplicate case value");
+                //     }
+                //     context.cases.push(cv.clone());
+                // }
                 context.before_first_case = false;
 
                 let this_case_label = context.next_case_label.clone();
@@ -1165,8 +1266,17 @@ impl Parser {
         self.instruction(Instruction::Label(this_case_label.clone()));
 
         // condition or not? ie case vs default
-        if let Some(cv) = case_value {
-            let dest = Value::Variable(self.make_temporary());
+        if let Some(mut cv) = case_value {
+            let dest = Value::Variable(self.make_temporary(), SymbolType::Int32);
+            if Self::get_type(&switch_value) != Self::get_type(&cv) {
+                cv = self.convert_to(&cv, &Self::get_type(&switch_value));
+            }
+            let context = self.switch_context_stack.last_mut().unwrap();
+            if context.cases.contains(&cv) {
+                bail!("Duplicate case value");
+            }
+            context.cases.push(cv.clone());
+
             self.instruction(Instruction::Binary(
                 BinaryOperator::Equal,
                 cv,
@@ -1195,7 +1305,7 @@ impl Parser {
     }
     pub(crate) fn is_lvalue(&mut self, value: &Value) -> bool {
         match value {
-            Value::Variable(var) => self.local_variables().values().any(|v| v.name == *var),
+            Value::Variable(var, _) => self.local_variables().values().any(|v| v.name == *var),
             _ => false,
         }
     }
@@ -1284,7 +1394,7 @@ impl Parser {
     pub(crate) fn peek(&mut self) -> Result<Token> {
         self.peek_n(0)
     }
-    pub(crate) fn lookup_symbol(&mut self, name: &str) -> Option<(Symbol, bool)> {
+    pub(crate) fn lookup_symbol(&self, name: &str) -> Option<(Symbol, bool)> {
         for i in (0..self.symbol_stack.len()).rev() {
             if let Some(sym) = self.symbol_stack[i].get(name) {
                 return Some((sym.clone(), i == self.symbol_stack.len() - 1));
@@ -1295,7 +1405,7 @@ impl Parser {
     pub(crate) fn get_global_symbol(&mut self, name: &str) -> Symbol {
         self.symbol_stack[0].get(name).unwrap().clone()
     }
-    pub(crate) fn lookup_global_symbol(&mut self, name: &str) -> Option<(Symbol, bool)> {
+    pub(crate) fn lookup_global_symbol(&self, name: &str) -> Option<(Symbol, bool)> {
         if let Some(sym) = self.symbol_stack[0].get(name) {
             return Some((sym.clone(), self.symbol_stack.len() == 1));
         }

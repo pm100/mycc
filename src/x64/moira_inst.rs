@@ -1,12 +1,12 @@
 #[derive(Debug, Clone)]
 pub enum Instruction {
     Ret,
-    Mov(Operand, Operand),
-    Unary(UnaryOperator, Operand),
-    Binary(BinaryOperator, Operand, Operand),
-    Idiv(Operand),
-    Cdq,
-    Cmp(Operand, Operand),
+    Mov(AssemblyType, Operand, Operand),
+    Unary(UnaryOperator, AssemblyType, Operand),
+    Binary(BinaryOperator, AssemblyType, Operand, Operand),
+    Idiv(AssemblyType, Operand),
+    Cdq(AssemblyType),
+    Cmp(AssemblyType, Operand, Operand),
     Jmp(String),
     JmpCC(CondCode, String),
     SetCC(CondCode, Operand),
@@ -15,14 +15,22 @@ pub enum Instruction {
     Push(Operand),
     DeallocateStack(i32),
     AllocateStack(i32),
+    SignExtend(Operand, Operand),
+    //Truncate(Operand, Operand),
 }
 #[derive(Debug, Clone)]
 pub enum UnaryOperator {
     Neg,
     Not,
 }
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
+pub enum AssemblyType {
+    LongWord,
+    QuadWord,
+    Byte,
+    Word,
+}
+#[derive(Debug, Clone, PartialEq)]
 pub enum BinaryOperator {
     Add,
     Sub,
@@ -36,23 +44,22 @@ pub enum BinaryOperator {
 #[derive(Debug, Clone)]
 pub enum Operand {
     Register(Register),
-    Immediate(i32),
+    ImmediateI32(i32),
+    ImmediateI64(i64),
     Pseudo(String),
     Stack(i32),
     Data(String),
 }
 #[derive(Debug, Clone)]
 pub enum Register {
-    AX,
-    DX,
+    RAX,
+    RDX,
+    RCX,
     R8,
     R9,
-    RCX,
-    RDX,
     R10,
     R11,
     CL,
-    RAX,
 }
 #[derive(Debug, Clone)]
 pub enum CondCode {
