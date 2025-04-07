@@ -21,6 +21,7 @@ pub enum Instruction {
     Label(String),
     FunCall(String, Vec<Value>, Value),
     SignExtend(Value, Value),
+    ZeroExtend(Value, Value),
     Truncate(Value, Value),
 }
 #[derive(Debug)]
@@ -55,6 +56,8 @@ pub enum BinaryOperator {
 pub enum Value {
     Int32(i32),
     Int64(i64),
+    UInt32(u32),
+    UInt64(u64),
     Variable(String, SymbolType),
 }
 #[derive(Debug)]
@@ -69,13 +72,16 @@ pub struct Function {
 pub enum SymbolType {
     Int32,
     Int64,
-    //LongLong,
+    UInt32,
+    UInt64,
     Func(Vec<SymbolType>),
 }
 #[derive(Debug, Clone, PartialEq)]
 pub enum StaticInit {
     InitI32(i32),
     InitI64(i64),
+    InitU32(u32),
+    InitU64(u64),
     InitNone,
 }
 #[derive(Debug)]
@@ -111,6 +117,8 @@ impl TackyProgram {
         let init = match value {
             Some(Value::Int32(v)) => StaticInit::InitI32(v),
             Some(Value::Int64(v)) => StaticInit::InitI64(v),
+            Some(Value::UInt32(v)) => StaticInit::InitU32(v),
+            Some(Value::UInt64(v)) => StaticInit::InitU64(v),
             None => StaticInit::InitNone,
             _ => panic!("Invalid static variable type"),
         };
@@ -146,9 +154,11 @@ impl TackyProgram {
         match value {
             Value::Int32(_) => AssemblyType::LongWord,
             Value::Int64(_) => AssemblyType::QuadWord,
+            Value::UInt32(_) => AssemblyType::LongWord,
+            Value::UInt64(_) => AssemblyType::QuadWord,
             Value::Variable(_, stype) => match stype {
-                SymbolType::Int32 => AssemblyType::LongWord,
-                SymbolType::Int64 => AssemblyType::QuadWord,
+                SymbolType::Int32 | SymbolType::UInt32 => AssemblyType::LongWord,
+                SymbolType::Int64 | SymbolType::UInt64 => AssemblyType::QuadWord,
                 SymbolType::Func(_) => AssemblyType::QuadWord, // TODO
             },
         }
@@ -219,6 +229,9 @@ impl TackyProgram {
                     }
                     Instruction::Truncate(src, dest) => {
                         println!("      Truncate {:?} {:?}", src, dest);
+                    }
+                    Instruction::ZeroExtend(src, dest) => {
+                        println!("      ZeroExtend {:?} {:?}", src, dest);
                     }
                 }
             }

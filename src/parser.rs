@@ -1,6 +1,7 @@
 use anyhow::{bail, Result};
 use backtrace::{Backtrace, BacktraceFrame, BacktraceSymbol};
 use enum_as_inner::EnumAsInner;
+
 use std::{
     collections::{HashMap, VecDeque},
     mem::discriminant,
@@ -18,17 +19,7 @@ macro_rules! expect {
         }
     };
 }
-// macro_rules! fatal {
-//     ($msg:literal $(,)?) => {
-//         let message = format!(
-//             "{}:{} {}",
-//             self.lexer.file.display(),
-//             self.lexer.current_line_number,
-//             $msg
-//         );
-//         bail!(message);
-//     };
-// }
+
 use crate::{
     lexer::{Lexer, Token},
     tacky::{BinaryOperator, Instruction, SymbolType, TackyProgram, Value},
@@ -38,7 +29,7 @@ pub(crate) struct VariableName {
     pub(crate) name: String,
     pub(crate) is_current: bool,
 }
-
+#[derive(Debug, Clone)]
 pub struct Specifiers {
     pub is_static: bool,
     pub is_external: bool,
@@ -194,6 +185,9 @@ impl Parser {
         };
         let mut long_count = 0;
         let mut int_count = 0;
+        let mut signed_count = 0;
+        let mut unsigned_count = 0;
+
         loop {
             let token = self.peek()?;
             match token {
@@ -216,6 +210,26 @@ impl Parser {
                             break;
                         }
                     }
+                }
+                Token::Signed => {
+                    self.next_token()?;
+                    if signed_count > 0 {
+                        bail!("Duplicate signed specifier");
+                    }
+                    if unsigned_count > 0 {
+                        bail!("signed and unsigned cannot be used together");
+                    }
+                    signed_count += 1;
+                }
+                Token::Unsigned => {
+                    self.next_token()?;
+                    if unsigned_count > 0 {
+                        bail!("Duplicate unsigned specifier");
+                    }
+                    if signed_count > 0 {
+                        bail!("signed and unsigned cannot be used together");
+                    }
+                    unsigned_count += 1;
                 }
                 Token::Void => {
                     self.next_token()?;
@@ -240,14 +254,32 @@ impl Parser {
                 _ => break,
             };
         }
-        match (long_count, int_count) {
-            (0, 0) => specifiers.specified_type = None,
-            (1, 1) => specifiers.specified_type = Some(SymbolType::Int32),
-            (1, 0) => specifiers.specified_type = Some(SymbolType::Int32),
-            (2, 0) => specifiers.specified_type = Some(SymbolType::Int64),
-            (2, 1) => specifiers.specified_type = Some(SymbolType::Int64),
-            (0, 1) => specifiers.specified_type = Some(SymbolType::Int32),
-            _ => bail!("Invalid type specifier"),
+        if unsigned_count > 0 {
+            match (long_count, int_count) {
+                (0, 0) => specifiers.specified_type = Some(SymbolType::UInt32),
+                (1, 1) => specifiers.specified_type = Some(SymbolType::UInt32),
+                (1, 0) => specifiers.specified_type = Some(SymbolType::UInt32),
+                (2, 0) => specifiers.specified_type = Some(SymbolType::UInt64),
+                (2, 1) => specifiers.specified_type = Some(SymbolType::UInt64),
+                (0, 1) => specifiers.specified_type = Some(SymbolType::UInt32),
+                _ => bail!("Invalid type specifier"),
+            }
+        } else {
+            match (long_count, int_count) {
+                (0, 0) => {
+                    specifiers.specified_type = if signed_count > 0 {
+                        Some(SymbolType::Int32)
+                    } else {
+                        None
+                    }
+                }
+                (1, 1) => specifiers.specified_type = Some(SymbolType::Int32),
+                (1, 0) => specifiers.specified_type = Some(SymbolType::Int32),
+                (2, 0) => specifiers.specified_type = Some(SymbolType::Int64),
+                (2, 1) => specifiers.specified_type = Some(SymbolType::Int64),
+                (0, 1) => specifiers.specified_type = Some(SymbolType::Int32),
+                _ => bail!("Invalid type specifier"),
+            }
         }
         Ok(specifiers)
     }
@@ -851,17 +883,18 @@ impl Parser {
                     bail!("Static variable must be initialized to a constant");
                 }
                 if !is_auto {
+                    let converted = self.convert_to(&val, &symbol_type);
                     self.externs
                         .entry(rename.to_string())
                         .and_modify(|e| {
                             e.state = SymbolState::Defined;
-                            e.value = Some(val.clone());
+                            e.value = Some(converted.clone());
                         })
                         .or_insert(Extern {
                             name: rename.to_string(),
                             linkage: linkage.clone(),
                             state: SymbolState::Defined,
-                            value: Some(val),
+                            value: Some(converted),
                             stype: symbol_type.clone(),
                         });
                 }
@@ -1146,17 +1179,20 @@ impl Parser {
         // where 'break' will go
         let label_end = self.make_label("switch_end");
         self.break_label_stack.push(label_end.clone());
-
+        //defer!(self.break_label_stack.pop(););
+        let mut this = scopeguard::guard(&mut *self, |x| {
+            x.break_label_stack.pop();
+        });
         // evaluate the condition once
 
-        let value = self.do_expression(0)?;
-        self.expect(Token::RightParen)?;
+        let value = this.do_expression(0)?;
+        this.expect(Token::RightParen)?;
 
-        let next_drop_thru_label = self.make_label("next_drop_thru");
-        let next_case_label = self.make_label("next_case");
+        let next_drop_thru_label = this.make_label("next_drop_thru");
+        let next_case_label = this.make_label("next_case");
         // emit here otherwise the 'before first case' suppression gets it
-        self.instruction(Instruction::Jump(next_case_label.clone()));
-        self.switch_context_stack.push(SwitchContext {
+        this.instruction(Instruction::Jump(next_case_label.clone()));
+        this.switch_context_stack.push(SwitchContext {
             cases: Vec::new(),
             value,
             default_statement_seen: false,
@@ -1166,25 +1202,26 @@ impl Parser {
             next_drop_thru_label: next_drop_thru_label.clone(),
             next_case_label: next_case_label.clone(),
         });
+        // defer!(self.switch_context_stack.pop(););
         // the entire body of the switch statement is handled by this call
         // including the cases and breaks
-        self.do_statement()?;
+        this.do_statement()?;
 
         // at the end of the switch, add the exit label
         // plus any pending labels
-        self.instruction(Instruction::Label(label_end.clone()));
-        let last_case_label = self
+        this.instruction(Instruction::Label(label_end.clone()));
+        let last_case_label = this
             .switch_context_stack
             .last()
             .unwrap()
             .next_case_label
             .clone();
         if !last_case_label.is_empty() {
-            self.instruction(Instruction::Label(last_case_label));
+            this.instruction(Instruction::Label(last_case_label));
         }
 
-        self.switch_context_stack.pop();
-        self.break_label_stack.pop();
+        this.switch_context_stack.pop();
+        // self.break_label_stack.pop();
         Ok(())
     }
 
@@ -1205,7 +1242,11 @@ impl Parser {
 
         let case_value = if is_case {
             let cv = self.do_expression(0)?;
-            if !matches!(cv, Value::Int32(_)) && !matches!(cv, Value::Int64(_)) {
+            if !matches!(cv, Value::Int32(_))
+                && !matches!(cv, Value::Int64(_))
+                && !matches!(cv, Value::UInt32(_))
+                && !matches!(cv, Value::UInt64(_))
+            {
                 bail!("Switch value must be an integer");
             }
 

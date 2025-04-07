@@ -5,6 +5,7 @@ pub enum Instruction {
     Unary(UnaryOperator, AssemblyType, Operand),
     Binary(BinaryOperator, AssemblyType, Operand, Operand),
     Idiv(AssemblyType, Operand),
+    Div(AssemblyType, Operand),
     Cdq(AssemblyType),
     Cmp(AssemblyType, Operand, Operand),
     Jmp(String),
@@ -16,7 +17,6 @@ pub enum Instruction {
     DeallocateStack(i32),
     AllocateStack(i32),
     SignExtend(Operand, Operand),
-    //Truncate(Operand, Operand),
 }
 #[derive(Debug, Clone)]
 pub enum UnaryOperator {
@@ -40,12 +40,15 @@ pub enum BinaryOperator {
     BitXor,
     ShiftLeft,
     ShiftRight,
+    ShiftRightArith,
 }
 #[derive(Debug, Clone)]
 pub enum Operand {
     Register(Register),
     ImmediateI32(i32),
     ImmediateI64(i64),
+    ImmediateU32(u32),
+    ImmediateU64(u64),
     Pseudo(String),
     Stack(i32),
     Data(String),
@@ -69,4 +72,8 @@ pub enum CondCode {
     GE,
     L,
     LE,
+    A,
+    AE,
+    B,
+    BE,
 }

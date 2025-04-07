@@ -50,30 +50,51 @@ impl Parser {
                         println!("var: {} {:?}", var, token);
                         let right = self.do_expression(Self::precedence(&token))?;
                         let right_type = Self::get_type(&right);
-                        if token == Token::Equals {
-                            let converted = self.convert_to(&right, &left_type.clone());
-                            let inst = Instruction::Copy(converted.clone(), left.clone());
-                            self.instruction(inst);
-                            right
-                        } else {
-                            let op = Self::convert_compound(&token)?;
-                            let common_type =
-                                Self::get_common_type(&left_type.clone(), &right_type);
-                            let left_conv = self.convert_to(&left, &common_type);
-                            let right_conv = self.convert_to(&right, &common_type);
-                            self.instruction(Instruction::Binary(
-                                op,
-                                left_conv.clone(),
-                                right_conv.clone(),
-                                left_conv.clone(),
-                            ));
-                            // HACK
-                            // we need to make sure the the result is *not* an lvalue
-                            let dest = Value::Variable(self.make_temporary(), left_type.clone());
-                            let left_final = self.convert_to(&left_conv, &left_type);
-                            self.instruction(Instruction::Copy(left_final.clone(), left.clone()));
-                            self.instruction(Instruction::Copy(left_final.clone(), dest.clone()));
-                            dest
+                        match token {
+                            Token::Equals => {
+                                let converted = self.convert_to(&right, &left_type.clone());
+                                let inst = Instruction::Copy(converted.clone(), left.clone());
+                                self.instruction(inst);
+                                right
+                            }
+                            // Token::ShiftLeftEquals | Token::ShiftRightEquals => {
+                            //     let op = Self::convert_compound(&token)?;
+                            // }
+                            _ => {
+                                let op = Self::convert_compound(&token)?;
+                                let (left_conv, right_conv) = if token == Token::ShiftLeftEquals
+                                    || token == Token::ShiftRightEquals
+                                {
+                                    (left.clone(), right.clone())
+                                } else {
+                                    let common_type =
+                                        Self::get_common_type(&left_type.clone(), &right_type);
+                                    let left_conv = self.convert_to(&left, &common_type);
+                                    let right_conv = self.convert_to(&right, &common_type);
+                                    (left_conv, right_conv)
+                                };
+
+                                self.instruction(Instruction::Binary(
+                                    op,
+                                    left_conv.clone(),
+                                    right_conv.clone(),
+                                    left_conv.clone(),
+                                ));
+                                // HACK
+                                // we need to make sure the the result is *not* an lvalue
+                                let dest =
+                                    Value::Variable(self.make_temporary(), left_type.clone());
+                                let left_final = self.convert_to(&left_conv, &left_type);
+                                self.instruction(Instruction::Copy(
+                                    left_final.clone(),
+                                    left.clone(),
+                                ));
+                                self.instruction(Instruction::Copy(
+                                    left_final.clone(),
+                                    dest.clone(),
+                                ));
+                                dest
+                            }
                         }
                     } else {
                         bail!("Expected variable, got {:?}", left);
@@ -155,7 +176,8 @@ impl Parser {
 
                     //true
                     let true_exp = self.do_expression(0)?;
-                    let result = Value::Variable(self.make_temporary(), Self::get_type(&true_exp));
+                    let mut result =
+                        Value::Variable(self.make_temporary(), Self::get_type(&true_exp));
                     self.instruction(Instruction::Copy(true_exp.clone(), result.clone()));
                     self.instruction(Instruction::Jump(maybe_true_label.clone()));
 
@@ -175,6 +197,7 @@ impl Parser {
                         self.instruction(Instruction::Jump(exit_label.clone()));
                         self.instruction(Instruction::Label(maybe_true_label.clone()));
                         let true_converted = self.convert_to(&true_exp, &common_type);
+                        result = Value::Variable(self.make_temporary(), common_type);
                         self.instruction(Instruction::Copy(true_converted, result.clone()));
                         // self.instruction(Instruction::Jump(exit_label.clone()));
                     } else {
@@ -215,52 +238,80 @@ impl Parser {
         match value {
             Value::Int32(_) => SymbolType::Int32,
             Value::Int64(_) => SymbolType::Int64,
+            Value::UInt32(_) => SymbolType::UInt32,
+            Value::UInt64(_) => SymbolType::UInt64,
             Value::Variable(_, t) => t.clone(),
+        }
+    }
+    pub fn is_signed(symbol: &SymbolType) -> bool {
+        match symbol {
+            SymbolType::Int32 | SymbolType::Int64 => true,
+            SymbolType::UInt32 | SymbolType::UInt64 => false,
+            _ => false,
+        }
+    }
+    pub fn get_size_of_stype(symbol: &SymbolType) -> i32 {
+        match symbol {
+            SymbolType::Int32 | SymbolType::UInt32 => 4,
+            SymbolType::Int64 | SymbolType::UInt64 => 8,
+            SymbolType::Func(_) => 8,
         }
     }
     fn get_common_type(a: &SymbolType, b: &SymbolType) -> SymbolType {
         if a == b {
             return a.clone();
         }
-        match (a, b) {
-            (SymbolType::Int32, SymbolType::Int64) => SymbolType::Int64,
-            (SymbolType::Int64, SymbolType::Int32) => SymbolType::Int64,
-            _ => SymbolType::Int64,
+        let sizea = Self::get_size_of_stype(a);
+        let sizeb = Self::get_size_of_stype(b);
+        if sizea == sizeb {
+            if Self::is_signed(a) {
+                return b.clone();
+            } else {
+                return a.clone();
+            }
+        }
+        if sizea > sizeb {
+            a.clone()
+        } else {
+            b.clone()
         }
     }
-
+    // note that this converts immediates as well as variables
     pub fn convert_to(&mut self, value: &Value, target_type: &SymbolType) -> Value {
-        //        let dest = Value::Variable(to_string(), target_type.clone());
-        if Self::get_type(value) == *target_type {
+        let vtype = Self::get_type(value);
+        if vtype == *target_type {
+            // easy case
             value.clone()
         } else {
-            match value {
-                Value::Int32(v) => {
-                    if *target_type == SymbolType::Int64 {
-                        Value::Int64(*v as i64)
-                    } else {
-                        value.clone()
-                    }
-                }
-                Value::Int64(v) => {
-                    if *target_type == SymbolType::Int32 {
-                        Value::Int32(*v as i32)
-                    } else {
-                        value.clone()
-                    }
-                }
+            match (value, target_type) {
+                // immediates
+                (Value::Int32(v), SymbolType::Int64) => Value::Int64(*v as i64),
+                (Value::Int32(v), SymbolType::UInt64) => Value::UInt64(*v as u64),
+                (Value::Int32(v), SymbolType::UInt32) => Value::UInt32(*v as u32),
+                (Value::Int64(v), SymbolType::Int32) => Value::Int32(*v as i32),
+                (Value::Int64(v), SymbolType::UInt32) => Value::UInt32(*v as u32),
+                (Value::Int64(v), SymbolType::UInt64) => Value::UInt64(*v as u64),
+                (Value::UInt32(v), SymbolType::Int32) => Value::Int32(*v as i32),
+                (Value::UInt32(v), SymbolType::Int64) => Value::Int64(*v as i64),
+                (Value::UInt32(v), SymbolType::UInt64) => Value::UInt64(*v as u64),
+                (Value::UInt64(v), SymbolType::Int32) => Value::Int32(*v as i32),
+                (Value::UInt64(v), SymbolType::Int64) => Value::Int64(*v as i64),
+                (Value::UInt64(v), SymbolType::UInt32) => Value::UInt32(*v as u32),
+                // variables
                 _ => {
                     let dest_name = self.make_temporary();
+                    let vsize = Self::get_size_of_stype(&vtype);
+                    let tsize = Self::get_size_of_stype(target_type);
                     let dest = Value::Variable(dest_name.clone(), target_type.clone());
-                    match target_type {
-                        SymbolType::Int32 => {
-                            self.instruction(Instruction::Truncate(value.clone(), dest.clone()));
-                        }
-                        SymbolType::Int64 => {
-                            self.instruction(Instruction::SignExtend(value.clone(), dest.clone()));
-                        }
-
-                        _ => {}
+                    if tsize == vsize {
+                        // same size, just copy
+                        self.instruction(Instruction::Copy(value.clone(), dest.clone()));
+                    } else if tsize < vsize {
+                        self.instruction(Instruction::Truncate(value.clone(), dest.clone()));
+                    } else if Self::is_signed(&vtype) {
+                        self.instruction(Instruction::SignExtend(value.clone(), dest.clone()));
+                    } else {
+                        self.instruction(Instruction::ZeroExtend(value.clone(), dest.clone()));
                     }
                     dest.clone()
                 }
@@ -278,6 +329,14 @@ impl Parser {
             Token::LongConstant(val) => {
                 println!("val: {}", val);
                 Ok(Value::Int64(val))
+            }
+            Token::UConstant(val) => {
+                println!("val: {}", val);
+                Ok(Value::UInt32(val))
+            }
+            Token::ULongConstant(val) => {
+                println!("val: {}", val);
+                Ok(Value::UInt64(val))
             }
             // prefix ++ and --
             Token::PlusPlus => {
@@ -340,6 +399,7 @@ impl Parser {
             Token::LeftParen => {
                 // is this a cast?
                 let specifiers = self.load_specifiers()?;
+                println!("specifiers: {:?}", specifiers);
                 if specifiers.is_external || specifiers.is_static {
                     bail!("Cannot cast to external or static type");
                 }

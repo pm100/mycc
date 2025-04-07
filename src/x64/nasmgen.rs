@@ -107,12 +107,17 @@ impl X64CodeGenerator {
                 match var.value {
                     StaticInit::InitI32(value) => writeln!(writer, "{} dd {}", var.name, value)?,
                     StaticInit::InitI64(value) => writeln!(writer, "{} dq {}", var.name, value)?,
+                    StaticInit::InitU32(value) => writeln!(writer, "{} dd {}", var.name, value)?,
+                    StaticInit::InitU64(value) => writeln!(writer, "{} dq {}", var.name, value)?,
                     StaticInit::InitNone => {
-                        let size = match var.stype {
-                            crate::tacky::SymbolType::Int32 => "dd",
-                            crate::tacky::SymbolType::Int64 => "dq",
-                            _ => unreachable!("Unsupported type for static variable"),
-                        };
+                        let size =
+                            match var.stype {
+                                crate::tacky::SymbolType::Int32
+                                | crate::tacky::SymbolType::UInt32 => "dd",
+                                crate::tacky::SymbolType::Int64
+                                | crate::tacky::SymbolType::UInt64 => "dq",
+                                _ => unreachable!("Unsupported type for static variable"),
+                            };
                         writeln!(writer, "{} {} 0", var.name, size)?
                     }
                 }
@@ -194,7 +199,8 @@ impl X64CodeGenerator {
                     BinaryOperator::BitOr => "or",
                     BinaryOperator::BitXor => "xor",
                     BinaryOperator::ShiftLeft => "sal",
-                    BinaryOperator::ShiftRight => "sar",
+                    BinaryOperator::ShiftRightArith => "sar",
+                    BinaryOperator::ShiftRight => "shr",
                 };
                 let left_str = self.get_operand(left, assembly_type)?;
                 let right_str = self.get_operand(right, assembly_type)?;
@@ -203,6 +209,10 @@ impl X64CodeGenerator {
             Instruction::Idiv(assembly_type, divisor) => {
                 let op = self.get_operand(divisor, assembly_type)?;
                 writeln!(writer, "        idiv {}", op)?;
+            }
+            Instruction::Div(assembly_type, divisor) => {
+                let op = self.get_operand(divisor, assembly_type)?;
+                writeln!(writer, "        div {}", op)?;
             }
             Instruction::Cdq(assembly_type) => {
                 match assembly_type {
@@ -252,11 +262,7 @@ impl X64CodeGenerator {
                 let src_str = self.get_operand(src, &AssemblyType::LongWord)?;
                 let dest_str = self.get_operand(dest, &AssemblyType::QuadWord)?;
                 writeln!(writer, "        movsxd {}, {}", dest_str, src_str)?;
-            } // Instruction::Truncate(src, dest) => {
-              //     let src_str = self.get_operand(src, &AssemblyType::QuadWord)?;
-              //     let dest_str = self.get_operand(dest, &AssemblyType::LongWord)?;
-              //     writeln!(writer, "        movzx {}, {}", dest_str, src_str)?;
-              // }
+            }
         }
         Ok(())
     }
@@ -312,6 +318,8 @@ impl X64CodeGenerator {
         let val_str = match value {
             Operand::ImmediateI32(value) => value.to_string(),
             Operand::ImmediateI64(value) => value.to_string(),
+            Operand::ImmediateU32(value) => value.to_string(),
+            Operand::ImmediateU64(value) => value.to_string(),
             Operand::Pseudo(_) => panic!("Pseudo register not supported"),
             Operand::Register(register) => Self::get_reg_name(register, assembly_type),
 
@@ -345,6 +353,18 @@ impl X64CodeGenerator {
         match operand {
             Operand::ImmediateI64(val) => {
                 if *val > i32::MAX as i64 || *val < i32::MIN as i64 {
+                    instructions.push(Instruction::Mov(
+                        AssemblyType::QuadWord,
+                        operand.clone(),
+                        Operand::Register(SCRATCH_REGISTER1),
+                    ));
+                    Operand::Register(SCRATCH_REGISTER1)
+                } else {
+                    operand.clone()
+                }
+            }
+            Operand::ImmediateU64(val) => {
+                if *val > i32::MAX as u64 {
                     instructions.push(Instruction::Mov(
                         AssemblyType::QuadWord,
                         operand.clone(),
@@ -447,7 +467,9 @@ impl X64CodeGenerator {
                                 ));
                             }
                         }
-                        BinaryOperator::ShiftLeft | BinaryOperator::ShiftRight => {
+                        BinaryOperator::ShiftLeft
+                        | BinaryOperator::ShiftRightArith
+                        | BinaryOperator::ShiftRight => {
                             if Self::is_memory(&new_dest) {
                                 let scratch = Operand::Register(Register::CL);
                                 new_instructions.push(Instruction::Mov(
@@ -505,6 +527,36 @@ impl X64CodeGenerator {
                     }
                     _ => {
                         new_instructions.push(Instruction::Idiv(
+                            assembly_type.clone(),
+                            self.fix_pseudo(operand, assembly_type)?,
+                        ));
+                    }
+                },
+                Instruction::Div(assembly_type, operand) => match operand {
+                    Operand::ImmediateU32(imm) => {
+                        new_instructions.push(Instruction::Mov(
+                            assembly_type.clone(),
+                            Operand::ImmediateU32(*imm),
+                            Operand::Register(SCRATCH_REGISTER1),
+                        ));
+                        new_instructions.push(Instruction::Div(
+                            assembly_type.clone(),
+                            Operand::Register(SCRATCH_REGISTER1),
+                        ));
+                    }
+                    Operand::ImmediateU64(imm) => {
+                        new_instructions.push(Instruction::Mov(
+                            assembly_type.clone(),
+                            Operand::ImmediateU64(*imm),
+                            Operand::Register(SCRATCH_REGISTER1),
+                        ));
+                        new_instructions.push(Instruction::Div(
+                            assembly_type.clone(),
+                            Operand::Register(SCRATCH_REGISTER1),
+                        ));
+                    }
+                    _ => {
+                        new_instructions.push(Instruction::Div(
                             assembly_type.clone(),
                             self.fix_pseudo(operand, assembly_type)?,
                         ));
@@ -628,7 +680,10 @@ impl X64CodeGenerator {
         matches!(operand, Operand::Stack(_)) || matches!(operand, Operand::Data(_))
     }
     fn is_constant(operand: &Operand) -> bool {
-        matches!(operand, Operand::ImmediateI32(_)) || matches!(operand, Operand::ImmediateI64(_))
+        matches!(operand, Operand::ImmediateI32(_))
+            || matches!(operand, Operand::ImmediateI64(_))
+            || matches!(operand, Operand::ImmediateU32(_))
+            || matches!(operand, Operand::ImmediateU64(_))
     }
     fn translate_cc(cc: &CondCode) -> String {
         match cc {
@@ -638,20 +693,14 @@ impl X64CodeGenerator {
             CondCode::GE => "ge",
             CondCode::L => "l",
             CondCode::LE => "le",
+            CondCode::A => "a",
+            CondCode::AE => "ae",
+            CondCode::B => "b",
+            CondCode::BE => "be",
         }
         .to_string()
     }
-    fn _get_operand_size(&self, operand: &Operand) -> i32 {
-        match operand {
-            Operand::ImmediateI32(_) => 4,
-            Operand::ImmediateI64(_) => 8,
-            Operand::Register(Register::CL) => 1,
-            Operand::Register(_) => 4,
-            Operand::Pseudo(_) => 4,
-            Operand::Stack(_) => 4,
-            Operand::Data(_) => 4,
-        }
-    }
+
     fn get_operand_size(assembly_type: &AssemblyType) -> i32 {
         match assembly_type {
             AssemblyType::LongWord => 4,

@@ -25,6 +25,8 @@ pub enum Token {
     Identifier(String),
     Constant(i32),
     LongConstant(i64),
+    UConstant(u32),
+    ULongConstant(u64),
 
     // operators
     Complement, // ~
@@ -82,6 +84,8 @@ pub enum Token {
     Switch,
     Extern,
     Static,
+    Signed,
+    Unsigned,
 
     // special
     Eof,
@@ -257,17 +261,17 @@ impl Lexer {
 
                 _ => {
                     if char.is_ascii_digit() {
-                        let t = self.number();
+                        let t = self.number()?;
                         // reject 123foo
                         if self.peek().is_alphabetic() {
-                            println!("Error: unexpected character: {}", self.peek());
+                            //    println!("Error: unexpected character: {}", self.peek());
                             bail!("bad character")
                         }
                         t
                     } else if char.is_alphabetic() || char == '_' {
                         self.identifier()
                     } else {
-                        println!("Error: unexpected character: {}", char);
+                        //  println!("Error: unexpected character: {}", char);
                         bail!("bad character")
                     }
                 }
@@ -300,29 +304,69 @@ impl Lexer {
             "extern" => Token::Extern,
             "static" => Token::Static,
             "long" => Token::Long,
+            "signed" => Token::Signed,
+            "unsigned" => Token::Unsigned,
 
             _ => Token::Identifier(s.to_string()),
         }
     }
-    fn number(&mut self) -> Token {
+    fn number(&mut self) -> Result<Token> {
         let start = self.current_pos - 1;
         while self.peek().is_ascii_digit() {
             self.advance();
         }
         let mut val: i128 = self.current_line[start..self.current_pos].parse().unwrap();
-        if self.peek() == 'l' || self.peek() == 'L' {
+
+        let mut unsigned = false;
+        let mut long = false;
+        loop {
+            match self.peek() {
+                'u' | 'U' => {
+                    self.advance();
+                    if unsigned {
+                        bail!("Error: multiple unsigned specifiers")
+                    }
+                    unsigned = true;
+                }
+                'l' | 'L' => {
+                    self.advance();
+                    if long {
+                        bail!("Error: multiple long specifiers")
+                    }
+                    long = true;
+                }
+                _ => break,
+            };
+        }
+
+        if long {
+            if unsigned {
+                if val > u64::MAX as i128 {
+                    val &= 0xFFFFFFFFFFFFFFFF;
+                }
+                return Ok(Token::ULongConstant(val as u64));
+            }
             if val > i64::MAX as i128 {
                 val &= 0xFFFFFFFFFFFFFFFF;
             }
-            self.advance();
-            Token::LongConstant(val as i64)
-        } else if val > i32::MAX as i128 {
+            return Ok(Token::LongConstant(val as i64));
+        }
+        if unsigned {
+            if val > u32::MAX as i128 {
+                if val > u64::MAX as i128 {
+                    val &= 0xFFFFFFFFFFFFFFFF;
+                }
+                return Ok(Token::ULongConstant(val as u64));
+            }
+            return Ok(Token::UConstant(val as u32));
+        }
+        if val > i32::MAX as i128 {
             if val > i64::MAX as i128 {
                 val &= 0xFFFFFFFFFFFFFFFF;
             }
-            Token::LongConstant(val as i64)
+            Ok(Token::LongConstant(val as i64))
         } else {
-            Token::Constant(val as i32)
+            Ok(Token::Constant(val as i32))
         }
     }
     fn advance(&mut self) -> char {
