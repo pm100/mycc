@@ -2,9 +2,10 @@ use std::cmp::max;
 
 use crate::{
     codegen::MoiraGenerator,
-    moira::{MoiraProgram, StaticVariable},
+    moira::{MoiraProgram, StaticConstant, StaticVariable},
     parser::Parser,
     tacky::{SymbolType, TackyProgram},
+    x64::nasmgen::{self, X64CodeGenerator},
 };
 use anyhow::Result;
 
@@ -42,19 +43,46 @@ impl X64MoiraGenerator {
             SymbolType::Int64 => AssemblyType::QuadWord,
             SymbolType::UInt32 => AssemblyType::LongWord,
             SymbolType::UInt64 => AssemblyType::QuadWord,
+            SymbolType::Double => AssemblyType::Double,
             _ => unreachable!(),
         }
     }
+
+    /*
+
+    windows x64 calling convention
+
+    - first 4 parameters in rcx, rdx, r8, r9
+    - rest on stack, 8 bytes per parameter
+    - return value in rax
+    - stack aligned to 16 bytes
+    - stack grows down, so first parameter is at 8 bytes from rbp
+
+    - caller reseres space for the  register values just in case callee wants to store them
+
+    - doubles go into xmm0, xmm1, xmm2, xmm3
+     */
     fn gen_function(&mut self, function: &crate::tacky::Function) -> Result<()> {
-        let reglist: [Register; 4] = [Register::RCX, Register::RDX, Register::R8, Register::R9];
+        let int_reglist: [Register; 4] = [Register::RCX, Register::RDX, Register::R8, Register::R9];
+        let float_reglist: [Register; 4] = [
+            Register::XMM0,
+            Register::XMM1,
+            Register::XMM2,
+            Register::XMM3,
+        ];
 
         for idx in 0..function.parameters.len() {
-            if idx < reglist.len() {
+            if idx < int_reglist.len() {
                 let (param, stype) = &function.parameters[idx];
                 let assembly_type = Self::get_assembly_type(stype);
+                let register = if assembly_type == AssemblyType::Double {
+                    Operand::Register(float_reglist[idx].clone())
+                } else {
+                    Operand::Register(int_reglist[idx].clone())
+                };
                 self.moira(Instruction::Mov(
                     assembly_type.clone(),
-                    Operand::Register(reglist[idx].clone()),
+                    register,
                     Operand::Pseudo(param.clone()),
                 ));
             } else {
@@ -99,30 +127,58 @@ impl X64MoiraGenerator {
                 let (value1, stype1, assembly_type1) = self.get_value(value1);
                 let (value2, stype2, _) = self.get_value(value2);
                 assert!(stype1 == stype2);
-                let op = match unary_operator {
-                    tacky::UnaryOperator::Negate => UnaryOperator::Neg,
-                    tacky::UnaryOperator::Complement => UnaryOperator::Not,
-                    tacky::UnaryOperator::LogicalNot => {
-                        self.moira(Instruction::Cmp(
-                            assembly_type1.clone(),
-                            Self::generate_signed_immediate(assembly_type1.clone(), 0),
-                            value1.clone(),
-                        ));
-                        self.moira(Instruction::Mov(
-                            assembly_type1.clone(),
-                            Self::generate_signed_immediate(assembly_type1.clone(), 0),
-                            value2.clone(),
-                        ));
-                        self.moira(Instruction::SetCC(CondCode::E, value2.clone()));
-                        return Ok(());
+                if Self::get_assembly_type(&stype1) == AssemblyType::Double {
+                    match unary_operator {
+                        tacky::UnaryOperator::Negate => {
+                            let (const_0, _, _) = self.get_value(&tacky::Value::Double(-0.0));
+                            let scratch =
+                                X64CodeGenerator::get_scratch_register1(&AssemblyType::Double);
+
+                            self.moira(Instruction::Mov(
+                                assembly_type1.clone(),
+                                value1,
+                                scratch.clone(),
+                            ));
+                            self.moira(Instruction::Binary(
+                                BinaryOperator::BitXor,
+                                assembly_type1.clone(),
+                                const_0,
+                                scratch.clone(),
+                            ));
+                            self.moira(Instruction::Mov(
+                                assembly_type1.clone(),
+                                scratch.clone(),
+                                value2.clone(),
+                            ));
+                        }
+                        _ => todo!(),
                     }
-                };
-                self.moira(Instruction::Mov(
-                    assembly_type1.clone(),
-                    value1,
-                    value2.clone(),
-                ));
-                self.moira(Instruction::Unary(op, assembly_type1, value2));
+                } else {
+                    let op = match unary_operator {
+                        tacky::UnaryOperator::Negate => UnaryOperator::Neg,
+                        tacky::UnaryOperator::Complement => UnaryOperator::Not,
+                        tacky::UnaryOperator::LogicalNot => {
+                            self.moira(Instruction::Cmp(
+                                assembly_type1.clone(),
+                                Self::generate_signed_immediate(assembly_type1.clone(), 0),
+                                value1.clone(),
+                            ));
+                            self.moira(Instruction::Mov(
+                                assembly_type1.clone(),
+                                Self::generate_signed_immediate(assembly_type1.clone(), 0),
+                                value2.clone(),
+                            ));
+                            self.moira(Instruction::SetCC(CondCode::E, value2.clone()));
+                            return Ok(());
+                        }
+                    };
+                    self.moira(Instruction::Mov(
+                        assembly_type1.clone(),
+                        value1,
+                        value2.clone(),
+                    ));
+                    self.moira(Instruction::Unary(op, assembly_type1, value2));
+                }
             }
             tacky::Instruction::Binary(binary_operator, src1, src2, dest) => {
                 self.gen_binary(binary_operator, src1, src2, dest)?;
@@ -132,6 +188,7 @@ impl X64MoiraGenerator {
                 let (dest, _dest_stype, dest_assembly_type) = self.get_value(dest);
                 // bit blit to different types allowed
                 assert!(src_assembly_type == dest_assembly_type);
+
                 self.moira(Instruction::Mov(src_assembly_type, src, dest));
             }
             tacky::Instruction::Jump(label) => {
@@ -160,19 +217,26 @@ impl X64MoiraGenerator {
             }
             tacky::Instruction::FunCall(name, args, dest) => {
                 let (dest, _stype, ret_assembly_type) = self.get_value(dest);
-                let reglist: [Register; 4] =
+                let int_reglist: [Register; 4] =
                     [Register::RCX, Register::RDX, Register::R8, Register::R9];
+                let float_reglist: [Register; 4] = [
+                    Register::XMM0,
+                    Register::XMM1,
+                    Register::XMM2,
+                    Register::XMM3,
+                ];
                 let stack_delta = max(args.len(), 4) as i32 * 8;
 
                 for idx in 0..args.len() {
-                    if idx < reglist.len() {
+                    if idx < int_reglist.len() {
                         let arg = &args[idx];
                         let (argval, _arg_stype, arg_assembly_type) = self.get_value(arg);
-                        self.moira(Instruction::Mov(
-                            arg_assembly_type,
-                            argval,
-                            Operand::Register(reglist[idx].clone()),
-                        ));
+                        let register = if arg_assembly_type == AssemblyType::Double {
+                            Operand::Register(float_reglist[idx].clone())
+                        } else {
+                            Operand::Register(int_reglist[idx].clone())
+                        };
+                        self.moira(Instruction::Mov(arg_assembly_type, argval, register));
                     } else {
                         let arg = &args[(args.len() - idx) + 3];
                         let (argval, _arg_stype, arg_assembly_type) = self.get_value(arg);
@@ -243,6 +307,32 @@ impl X64MoiraGenerator {
                 let (dest, _dest_stype, _) = self.get_value(dest);
                 self.moira(Instruction::Mov(AssemblyType::LongWord, src, dest));
             } //_ => todo!(),
+            tacky::Instruction::DoubleToInt(src, dest) => {
+                let (src, _src_stype, _) = self.get_value(src);
+                let (dest, _dest_stype, dest_assembly_type) = self.get_value(dest);
+                //   self.moira(Instruction::Mov(AssemblyType::QuadWord, src, dest));
+                self.moira(Instruction::Cvttsdsi(dest_assembly_type, src, dest.clone()));
+                // todo!();
+            }
+            tacky::Instruction::IntToDouble(src, dest) => {
+                let (src, _src_stype, src_assembly_type) = self.get_value(src);
+                let (dest, _dest_stype, _) = self.get_value(dest);
+                self.moira(Instruction::Cvtsi2sd(src_assembly_type, src, dest));
+                //   self.moira(Instruction::Mov(AssemblyType::QuadWord, src, dest));
+                todo!();
+            }
+            tacky::Instruction::DoubleToUInt(src, dest) => {
+                let (src, _src_stype, _) = self.get_value(src);
+                let (dest, _dest_stype, _) = self.get_value(dest);
+                //   self.moira(Instruction::Mov(AssemblyType::QuadWord, src, dest));
+                todo!();
+            }
+            tacky::Instruction::UIntToDouble(src, dest) => {
+                let (src, _src_stype, _) = self.get_value(src);
+                let (dest, _dest_stype, _) = self.get_value(dest);
+                //   self.moira(Instruction::Mov(AssemblyType::QuadWord, src, dest));
+                todo!();
+            }
         }
         Ok(())
     }
@@ -256,103 +346,43 @@ impl X64MoiraGenerator {
         let (src1, src1_stype, assembly_type) = self.get_value(src1);
         let (src2, src2_stype, _) = self.get_value(src2);
         let (dest, dest_stype, _) = self.get_value(dest);
-
-        let op = match binary_operator {
-            tacky::BinaryOperator::Add => Some(BinaryOperator::Add),
-            tacky::BinaryOperator::Subtract => Some(BinaryOperator::Sub),
-            tacky::BinaryOperator::Multiply => Some(BinaryOperator::Mult),
-            tacky::BinaryOperator::BitAnd => Some(BinaryOperator::BitAnd),
-            tacky::BinaryOperator::BitOr => Some(BinaryOperator::BitOr),
-            tacky::BinaryOperator::BitXor => Some(BinaryOperator::BitXor),
-            tacky::BinaryOperator::ShiftLeft => Some(BinaryOperator::ShiftLeft),
-            tacky::BinaryOperator::ShiftRight => {
-                if Parser::is_signed(&src1_stype) {
-                    Some(BinaryOperator::ShiftRightArith)
-                } else {
-                    Some(BinaryOperator::ShiftRight)
-                }
-            }
-            _ => None,
-        };
-
-        if let Some(op) = op {
-            if op != BinaryOperator::ShiftLeft
-                && op != BinaryOperator::ShiftRightArith
-                && op != BinaryOperator::ShiftRight
+        if src1_stype == SymbolType::Double {
+            assert!(src2_stype == SymbolType::Double);
+            if binary_operator == &tacky::BinaryOperator::Add
+                || binary_operator == &tacky::BinaryOperator::Subtract
+                || binary_operator == &tacky::BinaryOperator::Multiply
+                || binary_operator == &tacky::BinaryOperator::Divide
             {
-                assert!(src1_stype == src2_stype);
-                assert!(src1_stype == dest_stype);
+                assert!(dest_stype == SymbolType::Double);
             }
-            self.moira(Instruction::Mov(assembly_type.clone(), src1, dest.clone()));
-            self.moira(Instruction::Binary(op, assembly_type.clone(), src2, dest));
-        } else {
-            match binary_operator {
-                tacky::BinaryOperator::Divide | tacky::BinaryOperator::Remainder => {
-                    assert!(src1_stype == dest_stype);
-                    self.moira(Instruction::Mov(
-                        assembly_type.clone(),
-                        src1,
-                        Operand::Register(Register::RAX),
-                    ));
 
-                    if Parser::is_signed(&src1_stype) {
-                        self.moira(Instruction::Cdq(assembly_type.clone()));
-                        self.moira(Instruction::Idiv(assembly_type.clone(), src2));
-                    } else {
+            let op = match binary_operator {
+                tacky::BinaryOperator::Add => Some(BinaryOperator::FAdd),
+                tacky::BinaryOperator::Subtract => Some(BinaryOperator::FSub),
+                tacky::BinaryOperator::Multiply => Some(BinaryOperator::FMul),
+                tacky::BinaryOperator::Divide => Some(BinaryOperator::FDiv),
+                _ => None,
+            };
+            if let Some(op) = op {
+                self.moira(Instruction::Mov(assembly_type.clone(), src1, dest.clone()));
+                self.moira(Instruction::Binary(op, assembly_type.clone(), src2, dest));
+                return Ok(());
+            } else {
+                match binary_operator {
+                    tacky::BinaryOperator::Equal
+                    | tacky::BinaryOperator::NotEqual
+                    | tacky::BinaryOperator::LessThan
+                    | tacky::BinaryOperator::LessThanOrEqual
+                    | tacky::BinaryOperator::GreaterThan
+                    | tacky::BinaryOperator::GreaterThanOrEqual => {
+                        assert!(src1_stype == src2_stype);
+                        self.moira(Instruction::FCmp(assembly_type.clone(), src2, src1));
                         self.moira(Instruction::Mov(
-                            assembly_type.clone(),
-                            Self::generate_signed_immediate(assembly_type.clone(), 0),
-                            Operand::Register(Register::RDX),
+                            AssemblyType::LongWord,
+                            Self::generate_signed_immediate(AssemblyType::LongWord, 0),
+                            dest.clone(),
                         ));
-                        self.moira(Instruction::Div(assembly_type.clone(), src2));
-                    }
-
-                    match binary_operator {
-                        tacky::BinaryOperator::Divide => {
-                            let instruction = Instruction::Mov(
-                                assembly_type.clone(),
-                                Operand::Register(Register::RAX),
-                                dest,
-                            );
-                            self.moira(instruction);
-                        }
-                        tacky::BinaryOperator::Remainder => {
-                            let instruction = Instruction::Mov(
-                                assembly_type,
-                                Operand::Register(Register::RDX),
-                                dest,
-                            );
-                            self.moira(instruction);
-                        }
-
-                        _ => unreachable!(),
-                    }
-                }
-                tacky::BinaryOperator::Equal
-                | tacky::BinaryOperator::NotEqual
-                | tacky::BinaryOperator::LessThan
-                | tacky::BinaryOperator::LessThanOrEqual
-                | tacky::BinaryOperator::GreaterThan
-                | tacky::BinaryOperator::GreaterThanOrEqual => {
-                    assert!(src1_stype == src2_stype);
-                    self.moira(Instruction::Cmp(assembly_type.clone(), src2, src1));
-                    self.moira(Instruction::Mov(
-                        assembly_type.clone(),
-                        Self::generate_signed_immediate(assembly_type.clone(), 0),
-                        dest.clone(),
-                    ));
-                    let cc = if Parser::is_signed(&src1_stype) {
-                        match binary_operator {
-                            tacky::BinaryOperator::Equal => CondCode::E,
-                            tacky::BinaryOperator::NotEqual => CondCode::NE,
-                            tacky::BinaryOperator::LessThan => CondCode::L,
-                            tacky::BinaryOperator::LessThanOrEqual => CondCode::LE,
-                            tacky::BinaryOperator::GreaterThan => CondCode::G,
-                            tacky::BinaryOperator::GreaterThanOrEqual => CondCode::GE,
-                            _ => unreachable!(),
-                        }
-                    } else {
-                        match binary_operator {
+                        let cc = match binary_operator {
                             tacky::BinaryOperator::Equal => CondCode::E,
                             tacky::BinaryOperator::NotEqual => CondCode::NE,
                             tacky::BinaryOperator::LessThan => CondCode::B,
@@ -360,18 +390,132 @@ impl X64MoiraGenerator {
                             tacky::BinaryOperator::GreaterThan => CondCode::A,
                             tacky::BinaryOperator::GreaterThanOrEqual => CondCode::AE,
                             _ => unreachable!(),
-                        }
-                    };
-                    self.moira(Instruction::SetCC(cc, dest));
+                        };
+                        self.moira(Instruction::SetCC(cc, dest));
+                    }
+                    __ => {
+                        unreachable!();
+                    }
                 }
-                _ => {
-                    unreachable!();
+                Ok(())
+            }
+        } else {
+            let op = match binary_operator {
+                tacky::BinaryOperator::Add => Some(BinaryOperator::Add),
+                tacky::BinaryOperator::Subtract => Some(BinaryOperator::Sub),
+                tacky::BinaryOperator::Multiply => Some(BinaryOperator::Mult),
+                tacky::BinaryOperator::BitAnd => Some(BinaryOperator::BitAnd),
+                tacky::BinaryOperator::BitOr => Some(BinaryOperator::BitOr),
+                tacky::BinaryOperator::BitXor => Some(BinaryOperator::BitXor),
+                tacky::BinaryOperator::ShiftLeft => Some(BinaryOperator::ShiftLeft),
+                tacky::BinaryOperator::ShiftRight => {
+                    if Parser::is_signed(&src1_stype) {
+                        Some(BinaryOperator::ShiftRightArith)
+                    } else {
+                        Some(BinaryOperator::ShiftRight)
+                    }
+                }
+                _ => None,
+            };
+
+            if let Some(op) = op {
+                if op != BinaryOperator::ShiftLeft
+                    && op != BinaryOperator::ShiftRightArith
+                    && op != BinaryOperator::ShiftRight
+                {
+                    assert!(src1_stype == src2_stype);
+                    assert!(src1_stype == dest_stype);
+                }
+                self.moira(Instruction::Mov(assembly_type.clone(), src1, dest.clone()));
+                self.moira(Instruction::Binary(op, assembly_type.clone(), src2, dest));
+            } else {
+                match binary_operator {
+                    tacky::BinaryOperator::Divide | tacky::BinaryOperator::Remainder => {
+                        assert!(src1_stype == dest_stype);
+                        self.moira(Instruction::Mov(
+                            assembly_type.clone(),
+                            src1,
+                            Operand::Register(Register::RAX),
+                        ));
+
+                        if Parser::is_signed(&src1_stype) {
+                            self.moira(Instruction::Cdq(assembly_type.clone()));
+                            self.moira(Instruction::Idiv(assembly_type.clone(), src2));
+                        } else {
+                            self.moira(Instruction::Mov(
+                                assembly_type.clone(),
+                                Self::generate_signed_immediate(assembly_type.clone(), 0),
+                                Operand::Register(Register::RDX),
+                            ));
+                            self.moira(Instruction::Div(assembly_type.clone(), src2));
+                        }
+
+                        match binary_operator {
+                            tacky::BinaryOperator::Divide => {
+                                let instruction = Instruction::Mov(
+                                    assembly_type.clone(),
+                                    Operand::Register(Register::RAX),
+                                    dest,
+                                );
+                                self.moira(instruction);
+                            }
+                            tacky::BinaryOperator::Remainder => {
+                                let instruction = Instruction::Mov(
+                                    assembly_type,
+                                    Operand::Register(Register::RDX),
+                                    dest,
+                                );
+                                self.moira(instruction);
+                            }
+
+                            _ => unreachable!(),
+                        }
+                    }
+                    tacky::BinaryOperator::Equal
+                    | tacky::BinaryOperator::NotEqual
+                    | tacky::BinaryOperator::LessThan
+                    | tacky::BinaryOperator::LessThanOrEqual
+                    | tacky::BinaryOperator::GreaterThan
+                    | tacky::BinaryOperator::GreaterThanOrEqual => {
+                        assert!(src1_stype == src2_stype);
+                        self.moira(Instruction::Cmp(assembly_type.clone(), src2, src1));
+                        self.moira(Instruction::Mov(
+                            assembly_type.clone(),
+                            Self::generate_signed_immediate(assembly_type.clone(), 0),
+                            dest.clone(),
+                        ));
+                        let cc = if Parser::is_signed(&src1_stype) {
+                            match binary_operator {
+                                tacky::BinaryOperator::Equal => CondCode::E,
+                                tacky::BinaryOperator::NotEqual => CondCode::NE,
+                                tacky::BinaryOperator::LessThan => CondCode::L,
+                                tacky::BinaryOperator::LessThanOrEqual => CondCode::LE,
+                                tacky::BinaryOperator::GreaterThan => CondCode::G,
+                                tacky::BinaryOperator::GreaterThanOrEqual => CondCode::GE,
+                                _ => unreachable!(),
+                            }
+                        } else {
+                            match binary_operator {
+                                tacky::BinaryOperator::Equal => CondCode::E,
+                                tacky::BinaryOperator::NotEqual => CondCode::NE,
+                                tacky::BinaryOperator::LessThan => CondCode::B,
+                                tacky::BinaryOperator::LessThanOrEqual => CondCode::BE,
+                                tacky::BinaryOperator::GreaterThan => CondCode::A,
+                                tacky::BinaryOperator::GreaterThanOrEqual => CondCode::AE,
+                                _ => unreachable!(),
+                            }
+                        };
+                        self.moira(Instruction::SetCC(cc, dest));
+                    }
+                    _ => {
+                        unreachable!();
+                    }
                 }
             }
+            Ok(())
         }
-        Ok(())
     }
-    fn get_value(&self, value: &crate::tacky::Value) -> (Operand, SymbolType, AssemblyType) {
+    fn get_value(&mut self, value: &crate::tacky::Value) -> (Operand, SymbolType, AssemblyType) {
         match value {
             tacky::Value::Int32(value) => (
                 Operand::ImmediateI32(*value),
@@ -393,6 +537,27 @@ impl X64MoiraGenerator {
                 SymbolType::Int64,
                 AssemblyType::QuadWord,
             ),
+            tacky::Value::Double(value) => {
+                let strval = format!("{:?}", value).replace('-', "_");
+                let const_label = if let Some(v) = self.moira.static_constants.get(&strval) {
+                    v.name.clone()
+                } else {
+                    let const_label = format!("__const_{}", strval);
+                    self.moira.static_constants.insert(
+                        strval.clone(),
+                        StaticConstant {
+                            name: const_label.clone(),
+                            value: tacky::StaticInit::InitDouble(value.clone()),
+                            align: 16,
+                        },
+                    );
+                    const_label
+                };
+                let dest = Operand::Data(const_label);
+
+                (dest, SymbolType::Double, AssemblyType::Double)
+            }
+
             tacky::Value::Variable(register, symbol_type) => {
                 let assembly_type = Self::get_assembly_type(symbol_type);
                 if self.moira.top_vars.iter().any(|v| v.name == *register) {

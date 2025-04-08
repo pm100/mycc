@@ -187,10 +187,18 @@ impl Parser {
         let mut int_count = 0;
         let mut signed_count = 0;
         let mut unsigned_count = 0;
+        let mut double_count = 0;
 
         loop {
             let token = self.peek()?;
             match token {
+                Token::Double => {
+                    self.next_token()?;
+                    if double_count > 0 {
+                        bail!("Duplicate double specifier");
+                    }
+                    double_count += 1;
+                }
                 Token::Int => {
                     self.next_token()?;
                     int_count += 1;
@@ -253,6 +261,22 @@ impl Parser {
                 }
                 _ => break,
             };
+        }
+        if double_count > 0 {
+            if long_count > 0 {
+                bail!("long and double cannot be used together");
+            }
+            if int_count > 0 {
+                bail!("int and double cannot be used together");
+            }
+            if signed_count > 0 {
+                bail!("signed and double cannot be used together");
+            }
+            if unsigned_count > 0 {
+                bail!("unsigned and double cannot be used together");
+            }
+            specifiers.specified_type = Some(SymbolType::Double);
+            return Ok(specifiers);
         }
         if unsigned_count > 0 {
             match (long_count, int_count) {
@@ -1186,6 +1210,9 @@ impl Parser {
         // evaluate the condition once
 
         let value = this.do_expression(0)?;
+        if Self::get_type(&value) == SymbolType::Double {
+            bail!("Switch value must be an integer");
+        }
         this.expect(Token::RightParen)?;
 
         let next_drop_thru_label = this.make_label("next_drop_thru");

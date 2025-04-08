@@ -22,6 +22,8 @@ struct FunctionDesc {
 }
 const SCRATCH_REGISTER1: Register = Register::R10;
 const SCRATCH_REGISTER2: Register = Register::R11;
+const FLOAT_SCRATCH1: Register = Register::XMM14;
+const FLOAT_SCRATCH2: Register = Register::XMM15;
 
 impl MoiraCompiler for X64CodeGenerator {
     type InstructionType = Instruction;
@@ -90,7 +92,10 @@ impl X64CodeGenerator {
 
         Ok(())
     }
-
+    fn double_to_hex(value: f64) -> String {
+        let hex = value.to_bits();
+        format!("{:x}", hex)
+    }
     fn gen_vars(
         &mut self,
         moira: &MoiraProgram<Instruction>,
@@ -109,6 +114,9 @@ impl X64CodeGenerator {
                     StaticInit::InitI64(value) => writeln!(writer, "{} dq {}", var.name, value)?,
                     StaticInit::InitU32(value) => writeln!(writer, "{} dd {}", var.name, value)?,
                     StaticInit::InitU64(value) => writeln!(writer, "{} dq {}", var.name, value)?,
+                    StaticInit::InitDouble(value) => {
+                        writeln!(writer, "{}: dq 0x{}", var.name, Self::double_to_hex(value))?
+                    }
                     StaticInit::InitNone => {
                         let size =
                             match var.stype {
@@ -122,6 +130,22 @@ impl X64CodeGenerator {
                     }
                 }
                 //                writeln!(writer, "{} dd {}", var.name, var.value)?;
+            }
+        }
+
+        for (_, const_value) in moira.static_constants.iter() {
+            writeln!(writer, "segment .rodata")?;
+            match const_value.value {
+                StaticInit::InitDouble(value) => {
+                    writeln!(writer, "align 16")?;
+                    writeln!(
+                        writer,
+                        "{}: dq 0x{}",
+                        const_value.name,
+                        Self::double_to_hex(value)
+                    )?;
+                }
+                _ => unreachable!("Unsupported type for static constant"),
             }
         }
         Ok(())
@@ -164,6 +188,7 @@ impl X64CodeGenerator {
         instruction: &Instruction,
         writer: &mut BufWriter<std::fs::File>,
     ) -> Result<()> {
+        println!("Generating instruction: {:?}", instruction);
         match instruction {
             Instruction::Ret => {
                 writeln!(writer, "        mov rsp, rbp")?;
@@ -180,27 +205,43 @@ impl X64CodeGenerator {
                         assembly_type
                     },
                 )?;
-                writeln!(writer, "        mov {}, {}", dest_str, src_str)?;
+                writeln!(
+                    writer,
+                    "        {} {}, {}",
+                    if *assembly_type == AssemblyType::Double {
+                        "movsd"
+                    } else {
+                        "mov"
+                    },
+                    dest_str,
+                    src_str
+                )?;
             }
             Instruction::Unary(operator, assembly_type, operand) => {
                 let oper = match operator {
                     UnaryOperator::Neg => "neg",
                     UnaryOperator::Not => "not",
+                    UnaryOperator::FNeg => todo!(),
                 };
                 let op = self.get_operand(operand, assembly_type)?;
                 writeln!(writer, "        {} {}", oper, op)?;
             }
             Instruction::Binary(operator, assembly_type, left, right) => {
-                let op = match operator {
-                    BinaryOperator::Add => "add",
-                    BinaryOperator::Sub => "sub",
-                    BinaryOperator::Mult => "imul",
-                    BinaryOperator::BitAnd => "and",
-                    BinaryOperator::BitOr => "or",
-                    BinaryOperator::BitXor => "xor",
-                    BinaryOperator::ShiftLeft => "sal",
-                    BinaryOperator::ShiftRightArith => "sar",
-                    BinaryOperator::ShiftRight => "shr",
+                let op = match (operator, assembly_type) {
+                    (BinaryOperator::Add, _) => "add",
+                    (BinaryOperator::Sub, _) => "sub",
+                    (BinaryOperator::Mult, _) => "imul",
+                    (BinaryOperator::BitAnd, _) => "and",
+                    (BinaryOperator::BitOr, _) => "or",
+                    (BinaryOperator::BitXor, AssemblyType::Double) => "xorpd",
+                    (BinaryOperator::BitXor, _) => "xor",
+                    (BinaryOperator::ShiftLeft, _) => "sal",
+                    (BinaryOperator::ShiftRightArith, _) => "sar",
+                    (BinaryOperator::ShiftRight, _) => "shr",
+                    (BinaryOperator::FAdd, _) => "addsd",
+                    (BinaryOperator::FSub, _) => "subsd",
+                    (BinaryOperator::FMul, _) => "mulsd",
+                    (BinaryOperator::FDiv, _) => "divsd",
                 };
                 let left_str = self.get_operand(left, assembly_type)?;
                 let right_str = self.get_operand(right, assembly_type)?;
@@ -225,6 +266,11 @@ impl X64CodeGenerator {
                 let left_str = self.get_operand(left, assembly_type)?;
                 let right_str = self.get_operand(right, assembly_type)?;
                 writeln!(writer, "        cmp {}, {}", right_str, left_str)?;
+            }
+            Instruction::FCmp(assembly_type, left, right) => {
+                let left_str = self.get_operand(left, assembly_type)?;
+                let right_str = self.get_operand(right, assembly_type)?;
+                writeln!(writer, "        comisd {}, {}", right_str, left_str)?;
             }
             Instruction::Jmp(label) => {
                 writeln!(writer, "        jmp {}", label)?;
@@ -262,6 +308,16 @@ impl X64CodeGenerator {
                 let src_str = self.get_operand(src, &AssemblyType::LongWord)?;
                 let dest_str = self.get_operand(dest, &AssemblyType::QuadWord)?;
                 writeln!(writer, "        movsxd {}, {}", dest_str, src_str)?;
+            }
+            Instruction::Cvttsdsi(assembly_type, src, dest) => {
+                let src_str = self.get_operand(src, &AssemblyType::Double)?;
+                let dest_str = self.get_operand(dest, assembly_type)?;
+                writeln!(writer, "        cvttsd2si {}, {}", dest_str, src_str)?;
+            }
+            Instruction::Cvtsi2sd(assembly_type, src, dest) => {
+                let src_str = self.get_operand(src, assembly_type)?;
+                let dest_str = self.get_operand(dest, assembly_type)?;
+                writeln!(writer, "        cvtsi2sd {}, {}", dest_str, src_str)?;
             }
         }
         Ok(())
@@ -312,6 +368,16 @@ impl X64CodeGenerator {
             }
             .to_string(),
             Register::CL => "cl".to_string(),
+            Register::XMM0 => "xmm0".to_string(),
+            Register::XMM1 => "xmm1".to_string(),
+            Register::XMM2 => "xmm2".to_string(),
+            Register::XMM3 => "xmm3".to_string(),
+            Register::XMM4 => "xmm4".to_string(),
+            Register::XMM5 => "xmm5".to_string(),
+            Register::XMM6 => "xmm6".to_string(),
+            Register::XMM7 => "xmm7".to_string(),
+            Register::XMM14 => "xmm14".to_string(),
+            Register::XMM15 => "xmm15".to_string(),
         }
     }
     fn get_operand(&mut self, value: &Operand, assembly_type: &AssemblyType) -> Result<String> {
@@ -320,6 +386,7 @@ impl X64CodeGenerator {
             Operand::ImmediateI64(value) => value.to_string(),
             Operand::ImmediateU32(value) => value.to_string(),
             Operand::ImmediateU64(value) => value.to_string(),
+            Operand::ImmediateF64(value) => todo!(),
             Operand::Pseudo(_) => panic!("Pseudo register not supported"),
             Operand::Register(register) => Self::get_reg_name(register, assembly_type),
 
@@ -329,6 +396,7 @@ impl X64CodeGenerator {
                     AssemblyType::QuadWord => "QWORD",
                     AssemblyType::Byte => "BYTE",
                     AssemblyType::Word => "WORD",
+                    AssemblyType::Double => "",
                 };
 
                 format!("{} [rbp{:+}]", qual, offset)
@@ -339,6 +407,7 @@ impl X64CodeGenerator {
                     AssemblyType::QuadWord => "QWORD",
                     AssemblyType::Byte => "BYTE",
                     AssemblyType::Word => "WORD",
+                    AssemblyType::Double => "",
                 };
                 format!("{} [{}]", qual, data)
             }
@@ -378,6 +447,20 @@ impl X64CodeGenerator {
             _ => operand.clone(),
         }
     }
+    pub fn get_scratch_register1(assembly_type: &AssemblyType) -> Operand {
+        match assembly_type {
+            AssemblyType::LongWord | AssemblyType::QuadWord => Operand::Register(SCRATCH_REGISTER1),
+            AssemblyType::Double => Operand::Register(FLOAT_SCRATCH1),
+            _ => unreachable!(),
+        }
+    }
+    fn get_scratch_register2(assembly_type: &AssemblyType) -> Operand {
+        match assembly_type {
+            AssemblyType::LongWord | AssemblyType::QuadWord => Operand::Register(SCRATCH_REGISTER2),
+            AssemblyType::Double => Operand::Register(FLOAT_SCRATCH2),
+            _ => unreachable!(),
+        }
+    }
     fn fixup_pass(&mut self, function: &Function<Instruction>) -> Result<Vec<Instruction>> {
         self.next_offset = 0;
         self.pseudo_registers.clear();
@@ -389,7 +472,7 @@ impl X64CodeGenerator {
                     let new_dest = self.fix_pseudo(dest, assembly_type)?;
                     let new_src = self.fix_long_immediate(&new_src, &mut new_instructions);
                     if Self::is_memory(&new_src) && Self::is_memory(&new_dest) {
-                        let scratch = Operand::Register(SCRATCH_REGISTER1);
+                        let scratch = Self::get_scratch_register1(assembly_type);
                         new_instructions.push(Instruction::Mov(
                             assembly_type.clone(),
                             new_src,
@@ -419,7 +502,7 @@ impl X64CodeGenerator {
                         | BinaryOperator::BitOr
                         | BinaryOperator::BitXor => {
                             if Self::is_memory(&new_src) && Self::is_memory(&new_dest) {
-                                let scratch = Operand::Register(SCRATCH_REGISTER1);
+                                let scratch = Self::get_scratch_register1(assembly_type);
                                 new_instructions.push(Instruction::Mov(
                                     assembly_type.clone(),
                                     new_src,
@@ -442,7 +525,7 @@ impl X64CodeGenerator {
                         }
                         BinaryOperator::Mult => {
                             if Self::is_memory(&new_dest) {
-                                let scratch = Operand::Register(SCRATCH_REGISTER2);
+                                let scratch = Self::get_scratch_register2(assembly_type);
                                 new_instructions.push(Instruction::Mov(
                                     assembly_type.clone(),
                                     new_src,
@@ -491,6 +574,37 @@ impl X64CodeGenerator {
                                     new_dest,
                                 ));
                             }
+                        }
+                        BinaryOperator::FSub
+                        | BinaryOperator::FAdd
+                        | BinaryOperator::FDiv
+                        | BinaryOperator::FMul => {
+                            if Self::is_memory(&new_dest) {
+                                let scratch = Self::get_scratch_register2(&AssemblyType::Double);
+                                new_instructions.push(Instruction::Mov(
+                                    assembly_type.clone(),
+                                    new_dest.clone(),
+                                    scratch.clone(),
+                                ));
+                                new_instructions.push(Instruction::Binary(
+                                    op.clone(),
+                                    assembly_type.clone(),
+                                    new_src,
+                                    scratch.clone(),
+                                ));
+                                new_instructions.push(Instruction::Mov(
+                                    assembly_type.clone(),
+                                    scratch,
+                                    new_dest,
+                                ));
+                            } else {
+                                new_instructions.push(Instruction::Binary(
+                                    op.clone(),
+                                    assembly_type.clone(),
+                                    new_src,
+                                    new_dest,
+                                ));
+                            }
                         } // _ => todo!(),
                     }
                 }
@@ -507,22 +621,22 @@ impl X64CodeGenerator {
                         new_instructions.push(Instruction::Mov(
                             assembly_type.clone(),
                             Operand::ImmediateI32(*imm),
-                            Operand::Register(SCRATCH_REGISTER1),
+                            Self::get_scratch_register1(assembly_type),
                         ));
                         new_instructions.push(Instruction::Idiv(
                             assembly_type.clone(),
-                            Operand::Register(SCRATCH_REGISTER1),
+                            Self::get_scratch_register1(assembly_type),
                         ));
                     }
                     Operand::ImmediateI64(imm) => {
                         new_instructions.push(Instruction::Mov(
                             assembly_type.clone(),
                             Operand::ImmediateI64(*imm),
-                            Operand::Register(SCRATCH_REGISTER1),
+                            Self::get_scratch_register1(assembly_type),
                         ));
                         new_instructions.push(Instruction::Idiv(
                             assembly_type.clone(),
-                            Operand::Register(SCRATCH_REGISTER1),
+                            Self::get_scratch_register1(assembly_type),
                         ));
                     }
                     _ => {
@@ -537,22 +651,22 @@ impl X64CodeGenerator {
                         new_instructions.push(Instruction::Mov(
                             assembly_type.clone(),
                             Operand::ImmediateU32(*imm),
-                            Operand::Register(SCRATCH_REGISTER1),
+                            Self::get_scratch_register1(assembly_type),
                         ));
                         new_instructions.push(Instruction::Div(
                             assembly_type.clone(),
-                            Operand::Register(SCRATCH_REGISTER1),
+                            Self::get_scratch_register1(assembly_type),
                         ));
                     }
                     Operand::ImmediateU64(imm) => {
                         new_instructions.push(Instruction::Mov(
                             assembly_type.clone(),
                             Operand::ImmediateU64(*imm),
-                            Operand::Register(SCRATCH_REGISTER1),
+                            Self::get_scratch_register1(assembly_type),
                         ));
                         new_instructions.push(Instruction::Div(
                             assembly_type.clone(),
-                            Operand::Register(SCRATCH_REGISTER1),
+                            Self::get_scratch_register1(assembly_type),
                         ));
                     }
                     _ => {
@@ -567,7 +681,7 @@ impl X64CodeGenerator {
                     let new_src = self.fix_pseudo(src, assembly_type)?;
                     let new_src = self.fix_long_immediate(&new_src, &mut new_instructions);
                     if Self::is_constant(&new_dest) {
-                        let scratch = Operand::Register(SCRATCH_REGISTER2);
+                        let scratch = Self::get_scratch_register2(assembly_type);
                         new_instructions.push(Instruction::Mov(
                             assembly_type.clone(),
                             new_dest,
@@ -579,7 +693,7 @@ impl X64CodeGenerator {
                             scratch.clone(),
                         ));
                     } else if Self::is_memory(&new_dest) && Self::is_memory(&new_src) {
-                        let scratch = Operand::Register(SCRATCH_REGISTER1);
+                        let scratch = Self::get_scratch_register1(assembly_type);
                         new_instructions.push(Instruction::Mov(
                             assembly_type.clone(),
                             new_dest,
@@ -628,7 +742,7 @@ impl X64CodeGenerator {
                             new_instructions.push(Instruction::SignExtend(new_src, new_dest));
                         }
                         (false, true) => {
-                            let scratch = Operand::Register(SCRATCH_REGISTER1);
+                            let scratch = Self::get_scratch_register1(&AssemblyType::QuadWord);
 
                             new_instructions
                                 .push(Instruction::SignExtend(new_src, scratch.clone()));
@@ -639,8 +753,8 @@ impl X64CodeGenerator {
                             ));
                         }
                         (true, true) => {
-                            let scratch1 = Operand::Register(SCRATCH_REGISTER1);
-                            let scratch2 = Operand::Register(SCRATCH_REGISTER2);
+                            let scratch1 = Self::get_scratch_register1(&AssemblyType::QuadWord);
+                            let scratch2 = Self::get_scratch_register2(&AssemblyType::QuadWord);
                             new_instructions.push(Instruction::Mov(
                                 AssemblyType::LongWord,
                                 new_src,
@@ -655,7 +769,7 @@ impl X64CodeGenerator {
                             ));
                         }
                         (true, false) => {
-                            let scratch = Operand::Register(SCRATCH_REGISTER1);
+                            let scratch = Self::get_scratch_register1(&AssemblyType::QuadWord);
                             new_instructions.push(Instruction::Mov(
                                 AssemblyType::LongWord,
                                 new_src,
@@ -665,7 +779,78 @@ impl X64CodeGenerator {
                         } // _ => {}
                     }
                 }
+                Instruction::Cvtsi2sd(assembly_type, src, dest) => {
+                    let new_src = self.fix_pseudo(src, &AssemblyType::QuadWord)?;
+                    let new_dest = self.fix_pseudo(dest, &AssemblyType::QuadWord)?;
+                    if Self::is_memory(&new_dest) {
+                        let scratch = Self::get_scratch_register2(assembly_type);
 
+                        new_instructions.push(Instruction::Cvtsi2sd(
+                            assembly_type.clone(),
+                            new_src,
+                            scratch.clone(),
+                        ));
+                        new_instructions.push(Instruction::Mov(
+                            assembly_type.clone(),
+                            scratch,
+                            new_dest,
+                        ));
+                    } else {
+                        new_instructions.push(Instruction::Cvtsi2sd(
+                            assembly_type.clone(),
+                            new_src,
+                            new_dest,
+                        ));
+                    }
+                }
+                Instruction::Cvttsdsi(assembly_type, src, dest) => {
+                    let new_src = self.fix_pseudo(src, &AssemblyType::QuadWord)?;
+                    let new_dest = self.fix_pseudo(dest, &AssemblyType::QuadWord)?;
+                    if Self::is_memory(&new_dest) {
+                        let scratch = Self::get_scratch_register2(assembly_type);
+
+                        new_instructions.push(Instruction::Cvttsdsi(
+                            assembly_type.clone(),
+                            new_src,
+                            scratch.clone(),
+                        ));
+                        new_instructions.push(Instruction::Mov(
+                            assembly_type.clone(),
+                            scratch,
+                            new_dest,
+                        ));
+                    } else {
+                        new_instructions.push(Instruction::Cvttsdsi(
+                            assembly_type.clone(),
+                            new_src,
+                            new_dest,
+                        ));
+                    }
+                }
+                Instruction::FCmp(assembly_type, src, dest) => {
+                    let new_src = self.fix_pseudo(src, &AssemblyType::Double)?;
+                    let new_dest = self.fix_pseudo(dest, &AssemblyType::Double)?;
+                    if Self::is_memory(&new_dest) {
+                        let scratch = Self::get_scratch_register2(assembly_type);
+
+                        new_instructions.push(Instruction::Mov(
+                            assembly_type.clone(),
+                            new_dest,
+                            scratch.clone(),
+                        ));
+                        new_instructions.push(Instruction::FCmp(
+                            assembly_type.clone(),
+                            new_src.clone(),
+                            scratch.clone(),
+                        ));
+                    } else {
+                        new_instructions.push(Instruction::Mov(
+                            assembly_type.clone(),
+                            new_src,
+                            new_dest.clone(),
+                        ));
+                    }
+                }
                 _ => {
                     new_instructions.push(instruction.clone());
                 }
@@ -704,7 +889,7 @@ impl X64CodeGenerator {
     fn get_operand_size(assembly_type: &AssemblyType) -> i32 {
         match assembly_type {
             AssemblyType::LongWord => 4,
-            AssemblyType::QuadWord => 8,
+            AssemblyType::QuadWord | AssemblyType::Double => 8,
             AssemblyType::Byte => 1,
             AssemblyType::Word => 2,
         }

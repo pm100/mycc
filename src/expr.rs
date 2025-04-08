@@ -2,6 +2,7 @@ use crate::{
     lexer::Token,
     parser::{Parser, SymbolDetails},
     tacky::{BinaryOperator, Instruction, SymbolType, UnaryOperator, Value},
+    //  x64::moira_inst::BinaryOperator,
 };
 use anyhow::{bail, Result};
 
@@ -47,7 +48,7 @@ impl Parser {
                                 bail!("Variable {} not declared", var);
                             }
                         }
-                        println!("var: {} {:?}", var, token);
+
                         let right = self.do_expression(Self::precedence(&token))?;
                         let right_type = Self::get_type(&right);
                         match token {
@@ -57,11 +58,37 @@ impl Parser {
                                 self.instruction(inst);
                                 right
                             }
-                            // Token::ShiftLeftEquals | Token::ShiftRightEquals => {
-                            //     let op = Self::convert_compound(&token)?;
-                            // }
+
                             _ => {
                                 let op = Self::convert_compound(&token)?;
+                                println!(
+                                    "===>>op: {:?} left: {:?} {:?}",
+                                    op,
+                                    left.is_double(),
+                                    left
+                                );
+                                if Self::get_type(&left) == SymbolType::Double {
+                                    if op == BinaryOperator::BitAnd
+                                        || op == BinaryOperator::BitXor
+                                        || op == BinaryOperator::BitOr
+                                        || op == BinaryOperator::ShiftLeft
+                                        || op == BinaryOperator::ShiftRight
+                                        || op == BinaryOperator::Remainder
+                                    {
+                                        bail!("Cannot use this operator on double type");
+                                    }
+                                }
+                                if Self::get_type(&right) == SymbolType::Double {
+                                    if op == BinaryOperator::BitAnd
+                                        || op == BinaryOperator::BitXor
+                                        || op == BinaryOperator::BitOr
+                                        || op == BinaryOperator::ShiftLeft
+                                        || op == BinaryOperator::ShiftRight
+                                        || op == BinaryOperator::Remainder
+                                    {
+                                        bail!("Cannot use this operator on double type");
+                                    }
+                                }
                                 let (left_conv, right_conv) = if token == Token::ShiftLeftEquals
                                     || token == Token::ShiftRightEquals
                                 {
@@ -191,13 +218,17 @@ impl Parser {
                             &Self::get_type(&true_exp),
                             &Self::get_type(&false_exp),
                         );
+                        println!(
+                            "false_exp: {:?} te:{:?} ct {:?}",
+                            false_exp, true_exp, common_type
+                        );
                         let false_converted = self.convert_to(&false_exp, &common_type);
-
+                        result = Value::Variable(self.make_temporary(), common_type.clone());
                         self.instruction(Instruction::Copy(false_converted, result.clone()));
                         self.instruction(Instruction::Jump(exit_label.clone()));
                         self.instruction(Instruction::Label(maybe_true_label.clone()));
                         let true_converted = self.convert_to(&true_exp, &common_type);
-                        result = Value::Variable(self.make_temporary(), common_type);
+
                         self.instruction(Instruction::Copy(true_converted, result.clone()));
                         // self.instruction(Instruction::Jump(exit_label.clone()));
                     } else {
@@ -212,15 +243,42 @@ impl Parser {
 
                     let right = self.do_expression(Self::precedence(&token) + 1)?;
                     if op == BinaryOperator::ShiftLeft || op == BinaryOperator::ShiftRight {
+                        if Self::get_type(&left) == SymbolType::Double
+                            || Self::get_type(&right) == SymbolType::Double
+                        {
+                            bail!("Cannot use this operator on double type");
+                        }
                         let dest = Value::Variable(self.make_temporary(), left_type.clone());
                         self.instruction(Instruction::Binary(op, left, right, dest.clone()));
                         dest
                     } else {
+                        if op == BinaryOperator::Remainder
+                            || op == BinaryOperator::BitAnd
+                            || op == BinaryOperator::BitOr
+                            || op == BinaryOperator::BitXor
+                        {
+                            if Self::get_type(&left) == SymbolType::Double
+                                || Self::get_type(&right) == SymbolType::Double
+                            {
+                                bail!("Cannot use this operator on double type");
+                            }
+                        }
                         let right_type = Self::get_type(&right);
                         let common_type = Self::get_common_type(&left_type, &right_type);
                         let left = self.convert_to(&left, &common_type);
                         let right = self.convert_to(&right, &common_type);
-                        let dest = Value::Variable(self.make_temporary(), common_type.clone());
+                        let dest_type = if op == BinaryOperator::Equal
+                            || op == BinaryOperator::NotEqual
+                            || op == BinaryOperator::LessThan
+                            || op == BinaryOperator::LessThanOrEqual
+                            || op == BinaryOperator::GreaterThan
+                            || op == BinaryOperator::GreaterThanOrEqual
+                        {
+                            SymbolType::Int32
+                        } else {
+                            common_type.clone()
+                        };
+                        let dest = Value::Variable(self.make_temporary(), dest_type);
                         let inst = Instruction::Binary(op, left, right, dest.clone());
                         self.instruction(inst);
                         dest
@@ -240,6 +298,7 @@ impl Parser {
             Value::Int64(_) => SymbolType::Int64,
             Value::UInt32(_) => SymbolType::UInt32,
             Value::UInt64(_) => SymbolType::UInt64,
+            Value::Double(_) => SymbolType::Double,
             Value::Variable(_, t) => t.clone(),
         }
     }
@@ -254,12 +313,16 @@ impl Parser {
         match symbol {
             SymbolType::Int32 | SymbolType::UInt32 => 4,
             SymbolType::Int64 | SymbolType::UInt64 => 8,
+            SymbolType::Double => 8,
             SymbolType::Func(_) => 8,
         }
     }
     fn get_common_type(a: &SymbolType, b: &SymbolType) -> SymbolType {
         if a == b {
             return a.clone();
+        }
+        if a == &SymbolType::Double || b == &SymbolType::Double {
+            return SymbolType::Double;
         }
         let sizea = Self::get_size_of_stype(a);
         let sizeb = Self::get_size_of_stype(b);
@@ -297,21 +360,50 @@ impl Parser {
                 (Value::UInt64(v), SymbolType::Int32) => Value::Int32(*v as i32),
                 (Value::UInt64(v), SymbolType::Int64) => Value::Int64(*v as i64),
                 (Value::UInt64(v), SymbolType::UInt32) => Value::UInt32(*v as u32),
+                (Value::UInt64(v), SymbolType::Double) => Value::Double(*v as f64),
+                (Value::Int32(v), SymbolType::Double) => Value::Double(*v as f64),
+                (Value::Int64(v), SymbolType::Double) => Value::Double(*v as f64),
+                (Value::UInt32(v), SymbolType::Double) => Value::Double(*v as f64),
+                (Value::Double(v), SymbolType::Int32) => Value::Int32(*v as i32),
+                (Value::Double(v), SymbolType::Int64) => Value::Int64(*v as i64),
+                (Value::Double(v), SymbolType::UInt32) => Value::UInt32(*v as u32),
+                (Value::Double(v), SymbolType::UInt64) => Value::UInt64(*v as u64),
                 // variables
                 _ => {
                     let dest_name = self.make_temporary();
-                    let vsize = Self::get_size_of_stype(&vtype);
-                    let tsize = Self::get_size_of_stype(target_type);
                     let dest = Value::Variable(dest_name.clone(), target_type.clone());
-                    if tsize == vsize {
-                        // same size, just copy
-                        self.instruction(Instruction::Copy(value.clone(), dest.clone()));
-                    } else if tsize < vsize {
-                        self.instruction(Instruction::Truncate(value.clone(), dest.clone()));
-                    } else if Self::is_signed(&vtype) {
-                        self.instruction(Instruction::SignExtend(value.clone(), dest.clone()));
+
+                    let vsize = Self::get_size_of_stype(&vtype);
+                    if vtype == SymbolType::Double {
+                        if Self::is_signed(target_type) {
+                            self.instruction(Instruction::DoubleToInt(value.clone(), dest.clone()));
+                        } else {
+                            self.instruction(Instruction::DoubleToUInt(
+                                value.clone(),
+                                dest.clone(),
+                            ));
+                        }
+                    } else if target_type == &SymbolType::Double {
+                        if Self::is_signed(&vtype) {
+                            self.instruction(Instruction::IntToDouble(value.clone(), dest.clone()));
+                        } else {
+                            self.instruction(Instruction::UIntToDouble(
+                                value.clone(),
+                                dest.clone(),
+                            ));
+                        }
                     } else {
-                        self.instruction(Instruction::ZeroExtend(value.clone(), dest.clone()));
+                        let tsize = Self::get_size_of_stype(target_type);
+                        if tsize == vsize {
+                            // same size, just copy
+                            self.instruction(Instruction::Copy(value.clone(), dest.clone()));
+                        } else if tsize < vsize {
+                            self.instruction(Instruction::Truncate(value.clone(), dest.clone()));
+                        } else if Self::is_signed(&vtype) {
+                            self.instruction(Instruction::SignExtend(value.clone(), dest.clone()));
+                        } else {
+                            self.instruction(Instruction::ZeroExtend(value.clone(), dest.clone()));
+                        }
                     }
                     dest.clone()
                 }
@@ -337,6 +429,10 @@ impl Parser {
             Token::ULongConstant(val) => {
                 println!("val: {}", val);
                 Ok(Value::UInt64(val))
+            }
+            Token::F64Constant(val) => {
+                println!("val: {}", val);
+                Ok(Value::Double(val))
             }
             // prefix ++ and --
             Token::PlusPlus => {
@@ -386,6 +482,9 @@ impl Parser {
 
             Token::Complement => {
                 let source = self.do_factor()?;
+                if source.is_double() {
+                    bail!("Cannot use ~ on double type");
+                }
                 let dest_name = self.make_temporary();
                 let ret_dest = Value::Variable(dest_name.clone(), Self::get_type(&source));
                 let unop = Instruction::Unary(

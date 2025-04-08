@@ -23,6 +23,10 @@ pub enum Instruction {
     SignExtend(Value, Value),
     ZeroExtend(Value, Value),
     Truncate(Value, Value),
+    DoubleToInt(Value, Value),
+    DoubleToUInt(Value, Value),
+    IntToDouble(Value, Value),
+    UIntToDouble(Value, Value),
 }
 #[derive(Debug)]
 
@@ -58,6 +62,7 @@ pub enum Value {
     Int64(i64),
     UInt32(u32),
     UInt64(u64),
+    Double(f64),
     Variable(String, SymbolType),
 }
 #[derive(Debug)]
@@ -74,6 +79,7 @@ pub enum SymbolType {
     Int64,
     UInt32,
     UInt64,
+    Double,
     Func(Vec<SymbolType>),
 }
 #[derive(Debug, Clone, PartialEq)]
@@ -82,6 +88,7 @@ pub enum StaticInit {
     InitI64(i64),
     InitU32(u32),
     InitU64(u64),
+    InitDouble(f64),
     InitNone,
 }
 #[derive(Debug)]
@@ -119,6 +126,7 @@ impl TackyProgram {
             Some(Value::Int64(v)) => StaticInit::InitI64(v),
             Some(Value::UInt32(v)) => StaticInit::InitU32(v),
             Some(Value::UInt64(v)) => StaticInit::InitU64(v),
+            Some(Value::Double(v)) => StaticInit::InitDouble(v),
             None => StaticInit::InitNone,
             _ => panic!("Invalid static variable type"),
         };
@@ -156,9 +164,11 @@ impl TackyProgram {
             Value::Int64(_) => AssemblyType::QuadWord,
             Value::UInt32(_) => AssemblyType::LongWord,
             Value::UInt64(_) => AssemblyType::QuadWord,
+            Value::Double(_) => AssemblyType::QuadWord,
             Value::Variable(_, stype) => match stype {
                 SymbolType::Int32 | SymbolType::UInt32 => AssemblyType::LongWord,
                 SymbolType::Int64 | SymbolType::UInt64 => AssemblyType::QuadWord,
+                SymbolType::Double => AssemblyType::QuadWord,
                 SymbolType::Func(_) => AssemblyType::QuadWord, // TODO
             },
         }
@@ -232,6 +242,18 @@ impl TackyProgram {
                     }
                     Instruction::ZeroExtend(src, dest) => {
                         println!("      ZeroExtend {:?} {:?}", src, dest);
+                    }
+                    Instruction::DoubleToInt(src, dest) => {
+                        println!("      DoubleToInt {:?} {:?}", src, dest);
+                    }
+                    Instruction::DoubleToUInt(src, dest) => {
+                        println!("      DoubleToUInt {:?} {:?}", src, dest);
+                    }
+                    Instruction::IntToDouble(src, dest) => {
+                        println!("      IntToDouble {:?} {:?}", src, dest);
+                    }
+                    Instruction::UIntToDouble(src, dest) => {
+                        println!("      UIntToDouble {:?} {:?}", src, dest);
                     }
                 }
             }

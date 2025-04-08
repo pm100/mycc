@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use anyhow::Result;
 
 use crate::tacky::{StaticInit, SymbolType};
@@ -6,6 +8,7 @@ use crate::tacky::{StaticInit, SymbolType};
 pub struct MoiraProgram<TInst> {
     pub functions: Vec<Function<TInst>>,
     pub top_vars: Vec<StaticVariable>,
+    pub static_constants: HashMap<String, StaticConstant>,
     current_function: usize,
 }
 #[derive(Debug, Clone)]
@@ -21,6 +24,12 @@ pub struct StaticVariable {
     pub global: bool,
     pub external: bool,
     pub stype: SymbolType,
+}
+#[derive(Debug, Clone)]
+pub struct StaticConstant {
+    pub name: String,
+    pub align: u8,
+    pub value: StaticInit,
 }
 impl<TInst> Default for MoiraProgram<TInst>
 where
@@ -39,6 +48,7 @@ where
         MoiraProgram {
             functions: Vec::new(),
             top_vars: Vec::new(),
+            static_constants: HashMap::new(),
             current_function: 0,
         }
     }
@@ -66,6 +76,15 @@ where
             println!(
                 "TopVar: {} = {:?} Ext {}",
                 top_var.name, top_var.value, top_var.external
+            );
+        }
+        for static_constant in self.static_constants.iter() {
+            println!(
+                "StaticConstant: {} {} = {:?} Align {}",
+                static_constant.1.name,
+                static_constant.0,
+                static_constant.1.value,
+                static_constant.1.align
             );
         }
         for function in self.functions.iter() {

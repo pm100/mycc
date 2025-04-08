@@ -27,6 +27,7 @@ pub enum Token {
     LongConstant(i64),
     UConstant(u32),
     ULongConstant(u64),
+    F64Constant(f64),
 
     // operators
     Complement, // ~
@@ -86,9 +87,15 @@ pub enum Token {
     Static,
     Signed,
     Unsigned,
+    Double,
 
     // special
     Eof,
+}
+enum MaybeNumber {
+    Number(i128),
+    Float(f64),
+    None,
 }
 impl Lexer {
     pub fn new(path: &Path) -> Self {
@@ -260,19 +267,21 @@ impl Lexer {
                 }
 
                 _ => {
-                    if char.is_ascii_digit() {
+                    if char.is_ascii_digit() || char == '.' {
                         let t = self.number()?;
                         // reject 123foo
-                        if self.peek().is_alphabetic() {
+                        if !self.peek().is_whitespace()
+                            && !"!%&()*+,-/:;<=>?@[\\]^`{|}~\0".contains(self.peek())
+                        {
                             //    println!("Error: unexpected character: {}", self.peek());
-                            bail!("bad character")
+                            bail!("bad character1 {}", self.peek())
                         }
                         t
                     } else if char.is_alphabetic() || char == '_' {
                         self.identifier()
                     } else {
                         //  println!("Error: unexpected character: {}", char);
-                        bail!("bad character")
+                        bail!("bad character2")
                     }
                 }
             };
@@ -306,67 +315,99 @@ impl Lexer {
             "long" => Token::Long,
             "signed" => Token::Signed,
             "unsigned" => Token::Unsigned,
+            "double" => Token::Double,
 
             _ => Token::Identifier(s.to_string()),
         }
     }
-    fn number(&mut self) -> Result<Token> {
+
+    fn try_parse_float(&mut self) -> MaybeNumber {
         let start = self.current_pos - 1;
-        while self.peek().is_ascii_digit() {
-            self.advance();
-        }
-        let mut val: i128 = self.current_line[start..self.current_pos].parse().unwrap();
+        let rest_of_line = self.get_slice(start);
 
-        let mut unsigned = false;
-        let mut long = false;
-        loop {
-            match self.peek() {
-                'u' | 'U' => {
-                    self.advance();
-                    if unsigned {
-                        bail!("Error: multiple unsigned specifiers")
-                    }
-                    unsigned = true;
+        if let Ok((fl, count)) = fast_float::parse_partial::<f64, _>(rest_of_line.as_bytes()) {
+            if let Ok(val) = self.current_line[start..start + count].parse::<i128>() {
+                if val as f64 == fl {
+                    self.current_pos += val.to_string().len() - 1;
+                    return MaybeNumber::Number(val);
+                } else {
+                    self.current_pos += count - 1;
+                    return MaybeNumber::Float(fl);
                 }
-                'l' | 'L' => {
-                    self.advance();
-                    if long {
-                        bail!("Error: multiple long specifiers")
-                    }
-                    long = true;
-                }
-                _ => break,
-            };
-        }
-
-        if long {
-            if unsigned {
-                if val > u64::MAX as i128 {
-                    val &= 0xFFFFFFFFFFFFFFFF;
-                }
-                return Ok(Token::ULongConstant(val as u64));
+            } else {
+                self.current_pos += count - 1;
+                return MaybeNumber::Float(fl);
             }
-            if val > i64::MAX as i128 {
-                val &= 0xFFFFFFFFFFFFFFFF;
-            }
-            return Ok(Token::LongConstant(val as i64));
-        }
-        if unsigned {
-            if val > u32::MAX as i128 {
-                if val > u64::MAX as i128 {
-                    val &= 0xFFFFFFFFFFFFFFFF;
-                }
-                return Ok(Token::ULongConstant(val as u64));
-            }
-            return Ok(Token::UConstant(val as u32));
-        }
-        if val > i32::MAX as i128 {
-            if val > i64::MAX as i128 {
-                val &= 0xFFFFFFFFFFFFFFFF;
-            }
-            Ok(Token::LongConstant(val as i64))
         } else {
-            Ok(Token::Constant(val as i32))
+            return MaybeNumber::None;
+        }
+    }
+    fn number(&mut self) -> Result<Token> {
+        match self.try_parse_float() {
+            MaybeNumber::None => bail!("Error: invalid number"),
+            MaybeNumber::Float(f) => {
+                return Ok(Token::F64Constant(f));
+            }
+            MaybeNumber::Number(mut val) => {
+                // let start = self.current_pos - 1;
+                // while self.peek().is_ascii_digit() {
+                //     self.advance();
+                // }
+                //   let mut val: i128 = self.current_line[start..self.current_pos].parse().unwrap();
+
+                let mut unsigned = false;
+                let mut long = false;
+                loop {
+                    println!("peek: {:?}", self.peek());
+                    match self.peek() {
+                        'u' | 'U' => {
+                            self.advance();
+                            if unsigned {
+                                bail!("Error: multiple unsigned specifiers")
+                            }
+                            unsigned = true;
+                        }
+                        'l' | 'L' => {
+                            self.advance();
+                            if long {
+                                bail!("Error: multiple long specifiers")
+                            }
+                            long = true;
+                        }
+                        _ => break,
+                    };
+                }
+
+                if long {
+                    if unsigned {
+                        if val > u64::MAX as i128 {
+                            val &= 0xFFFFFFFFFFFFFFFF;
+                        }
+                        return Ok(Token::ULongConstant(val as u64));
+                    }
+                    if val > i64::MAX as i128 {
+                        val &= 0xFFFFFFFFFFFFFFFF;
+                    }
+                    return Ok(Token::LongConstant(val as i64));
+                }
+                if unsigned {
+                    if val > u32::MAX as i128 {
+                        if val > u64::MAX as i128 {
+                            val &= 0xFFFFFFFFFFFFFFFF;
+                        }
+                        return Ok(Token::ULongConstant(val as u64));
+                    }
+                    return Ok(Token::UConstant(val as u32));
+                }
+                if val > i32::MAX as i128 {
+                    if val > i64::MAX as i128 {
+                        val &= 0xFFFFFFFFFFFFFFFF;
+                    }
+                    Ok(Token::LongConstant(val as i64))
+                } else {
+                    Ok(Token::Constant(val as i32))
+                }
+            }
         }
     }
     fn advance(&mut self) -> char {
@@ -379,6 +420,10 @@ impl Lexer {
             return '\0';
         }
         self.chars[self.current_pos]
+    }
+
+    fn get_slice(&self, start: usize) -> &str {
+        &self.current_line[start..self.current_line.len()]
     }
     fn match_next(&mut self, c: char) -> bool {
         if self.at_end() {

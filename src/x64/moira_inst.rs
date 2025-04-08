@@ -8,6 +8,7 @@ pub enum Instruction {
     Div(AssemblyType, Operand),
     Cdq(AssemblyType),
     Cmp(AssemblyType, Operand, Operand),
+    FCmp(AssemblyType, Operand, Operand),
     Jmp(String),
     JmpCC(CondCode, String),
     SetCC(CondCode, Operand),
@@ -17,16 +18,20 @@ pub enum Instruction {
     DeallocateStack(i32),
     AllocateStack(i32),
     SignExtend(Operand, Operand),
+    Cvttsdsi(AssemblyType, Operand, Operand),
+    Cvtsi2sd(AssemblyType, Operand, Operand),
 }
 #[derive(Debug, Clone)]
 pub enum UnaryOperator {
     Neg,
     Not,
+    FNeg,
 }
 #[derive(Debug, Clone, PartialEq)]
 pub enum AssemblyType {
     LongWord,
     QuadWord,
+    Double,
     Byte,
     Word,
 }
@@ -41,6 +46,10 @@ pub enum BinaryOperator {
     ShiftLeft,
     ShiftRight,
     ShiftRightArith,
+    FAdd,
+    FSub,
+    FMul,
+    FDiv,
 }
 #[derive(Debug, Clone)]
 pub enum Operand {
@@ -49,6 +58,7 @@ pub enum Operand {
     ImmediateI64(i64),
     ImmediateU32(u32),
     ImmediateU64(u64),
+    ImmediateF64(f64),
     Pseudo(String),
     Stack(i32),
     Data(String),
@@ -63,6 +73,16 @@ pub enum Register {
     R10,
     R11,
     CL,
+    XMM0,
+    XMM1,
+    XMM2,
+    XMM3,
+    XMM4,
+    XMM5,
+    XMM6,
+    XMM7,
+    XMM14,
+    XMM15,
 }
 #[derive(Debug, Clone)]
 pub enum CondCode {
