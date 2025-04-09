@@ -96,4 +96,5 @@ pub enum CondCode {
     AE,
     B,
     BE,
+    P,
 }

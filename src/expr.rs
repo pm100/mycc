@@ -5,6 +5,7 @@ use crate::{
     //  x64::moira_inst::BinaryOperator,
 };
 use anyhow::{bail, Result};
+use backtrace::Symbol;
 
 impl Parser {
     pub(crate) fn do_expression(&mut self, min_prec: i32) -> Result<Value> {
@@ -520,7 +521,7 @@ impl Parser {
             Token::Not => {
                 let source = self.do_factor()?;
                 let dest_name = self.make_temporary();
-                let ret_dest = Value::Variable(dest_name.clone(), Self::get_type(&source));
+                let ret_dest = Value::Variable(dest_name.clone(), SymbolType::Int32);
                 let unop = Instruction::Unary(UnaryOperator::LogicalNot, source, ret_dest.clone());
                 self.instruction(unop);
                 Ok(ret_dest)

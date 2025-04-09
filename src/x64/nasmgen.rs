@@ -1,7 +1,7 @@
-use crate::moira::{Function, MoiraProgram};
+use crate::moira::{Function, MoiraProgram, StaticConstant};
 
 use crate::codegen::MoiraCompiler;
-use crate::tacky::StaticInit;
+use crate::tacky::{StaticInit, SymbolType};
 use anyhow::Result;
 use std::collections::HashMap;
 use std::io::Write;
@@ -101,8 +101,10 @@ impl X64CodeGenerator {
         moira: &MoiraProgram<Instruction>,
         writer: &mut BufWriter<std::fs::File>,
     ) -> Result<()> {
+        let mut extra_static_vars = Vec::new();
         for var in moira.top_vars.iter() {
             writeln!(writer, "segment .data")?;
+
             if var.external {
                 writeln!(writer, "extern {}", var.name)?;
             } else {
@@ -118,22 +120,33 @@ impl X64CodeGenerator {
                         writeln!(writer, "{}: dq 0x{}", var.name, Self::double_to_hex(value))?
                     }
                     StaticInit::InitNone => {
-                        let size =
-                            match var.stype {
-                                crate::tacky::SymbolType::Int32
-                                | crate::tacky::SymbolType::UInt32 => "dd",
-                                crate::tacky::SymbolType::Int64
-                                | crate::tacky::SymbolType::UInt64 => "dq",
-                                _ => unreachable!("Unsupported type for static variable"),
-                            };
-                        writeln!(writer, "{} {} 0", var.name, size)?
+                        match var.stype {
+                            SymbolType::Int32 | crate::tacky::SymbolType::UInt32 => {
+                                writeln!(writer, "{} dd 0", var.name)?
+                            }
+                            SymbolType::Int64 | crate::tacky::SymbolType::UInt64 => {
+                                writeln!(writer, "{} dq 0", var.name)?
+                            }
+                            SymbolType::Double => {
+                                extra_static_vars.push(StaticConstant {
+                                    name: var.name.clone(),
+                                    align: 16,
+                                    value: StaticInit::InitDouble(0.0),
+                                });
+                            }
+                            _ => unreachable!("Unsupported type for static variable"),
+                        };
                     }
                 }
                 //                writeln!(writer, "{} dd {}", var.name, var.value)?;
             }
         }
-
-        for (_, const_value) in moira.static_constants.iter() {
+        //  extra_static_vars.eappend(moira.static_constants.values().collect::<Vec<_>>());
+        for const_value in moira
+            .static_constants
+            .values()
+            .chain(extra_static_vars.iter())
+        {
             writeln!(writer, "segment .rodata")?;
             match const_value.value {
                 StaticInit::InitDouble(value) => {
@@ -170,16 +183,16 @@ impl X64CodeGenerator {
         function: &Function<Instruction>,
         writer: &mut BufWriter<std::fs::File>,
     ) -> Result<()> {
-        println!("Generating prologue for function: {}", function.name);
+        //println!("Generating prologue for function: {}", function.name);
 
         if function.global {
             writeln!(writer, "global {}", function.name)?;
         }
-
+        let adjust = self.next_offset % 16;
         writeln!(writer, "{}: ", function.name)?;
         writeln!(writer, "        push rbp")?;
         writeln!(writer, "        mov rbp, rsp")?;
-        writeln!(writer, "        sub rsp, {}", self.next_offset)?;
+        writeln!(writer, "        sub rsp, {}", self.next_offset + adjust)?;
         Ok(())
     }
 
@@ -454,7 +467,7 @@ impl X64CodeGenerator {
             _ => unreachable!(),
         }
     }
-    fn get_scratch_register2(assembly_type: &AssemblyType) -> Operand {
+    pub fn get_scratch_register2(assembly_type: &AssemblyType) -> Operand {
         match assembly_type {
             AssemblyType::LongWord | AssemblyType::QuadWord => Operand::Register(SCRATCH_REGISTER2),
             AssemblyType::Double => Operand::Register(FLOAT_SCRATCH2),
@@ -465,7 +478,9 @@ impl X64CodeGenerator {
         self.next_offset = 0;
         self.pseudo_registers.clear();
         let mut new_instructions = Vec::new();
+        println!("Fixing up function: {}", function.name);
         for instruction in function.instructions.iter() {
+            println!("Fixing up instruction: {:?}", instruction);
             match instruction {
                 Instruction::Mov(assembly_type, src, dest) => {
                     let new_src = self.fix_pseudo(src, assembly_type)?;
@@ -780,10 +795,10 @@ impl X64CodeGenerator {
                     }
                 }
                 Instruction::Cvtsi2sd(assembly_type, src, dest) => {
-                    let new_src = self.fix_pseudo(src, &AssemblyType::QuadWord)?;
-                    let new_dest = self.fix_pseudo(dest, &AssemblyType::QuadWord)?;
+                    let new_src = self.fix_pseudo(src, assembly_type)?;
+                    let new_dest = self.fix_pseudo(dest, &AssemblyType::Double)?;
                     if Self::is_memory(&new_dest) {
-                        let scratch = Self::get_scratch_register2(assembly_type);
+                        let scratch = Self::get_scratch_register2(&AssemblyType::Double);
 
                         new_instructions.push(Instruction::Cvtsi2sd(
                             assembly_type.clone(),
@@ -791,7 +806,7 @@ impl X64CodeGenerator {
                             scratch.clone(),
                         ));
                         new_instructions.push(Instruction::Mov(
-                            assembly_type.clone(),
+                            AssemblyType::Double,
                             scratch,
                             new_dest,
                         ));
@@ -882,6 +897,7 @@ impl X64CodeGenerator {
             CondCode::AE => "ae",
             CondCode::B => "b",
             CondCode::BE => "be",
+            CondCode::P => "p",
         }
         .to_string()
     }

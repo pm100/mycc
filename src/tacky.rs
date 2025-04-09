@@ -28,7 +28,7 @@ pub enum Instruction {
     IntToDouble(Value, Value),
     UIntToDouble(Value, Value),
 }
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 
 pub enum UnaryOperator {
     Negate,

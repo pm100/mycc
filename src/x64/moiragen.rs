@@ -14,13 +14,10 @@ use super::moira_inst::{
 };
 pub struct X64MoiraGenerator {
     moira: MoiraProgram<Instruction>,
+    instruction_counter: usize,
+    const_0: String,
 }
 
-// impl Default for X64MoiraGenerator {
-//     fn default() -> Self {
-//         Self::new()
-//     }
-// }
 use crate::tacky;
 impl Default for X64MoiraGenerator {
     fn default() -> Self {
@@ -30,9 +27,13 @@ impl Default for X64MoiraGenerator {
 
 impl X64MoiraGenerator {
     pub fn new() -> Self {
-        Self {
+        let mut s = Self {
             moira: MoiraProgram::new(),
-        }
+            instruction_counter: 0,
+            const_0: String::new(),
+        };
+        s.const_0 = s.make_static_constant(0.0);
+        s
     }
     fn moira(&mut self, inst: Instruction) {
         self.moira.add_instruction(inst);
@@ -96,6 +97,7 @@ impl X64MoiraGenerator {
             }
         }
         for instruction in &function.instructions {
+            self.instruction_counter += 1;
             self.gen_instruction(instruction)?;
         }
         Ok(())
@@ -107,30 +109,34 @@ impl X64MoiraGenerator {
             _ => todo!(),
         }
     }
-
+    fn gen_label_name(&self, label: &str) -> String {
+        format!("{}_{:04}", label, self.instruction_counter)
+    }
     fn gen_instruction(&mut self, instruction: &crate::tacky::Instruction) -> Result<()> {
         println!("gen_instruction: {:?}", instruction);
         match instruction {
             tacky::Instruction::Return(value) => {
                 let (value, _stype, assembly_type) = self.get_value(value);
-
-                self.moira(Instruction::Mov(
-                    assembly_type,
-                    value,
-                    Operand::Register(Register::RAX),
-                ));
+                let ret_reg = if assembly_type == AssemblyType::Double {
+                    Operand::Register(Register::XMM0)
+                } else {
+                    Operand::Register(Register::RAX)
+                };
+                self.moira(Instruction::Mov(assembly_type, value, ret_reg));
 
                 let instruction = Instruction::Ret;
                 self.moira(instruction);
             }
             tacky::Instruction::Unary(unary_operator, value1, value2) => {
                 let (value1, stype1, assembly_type1) = self.get_value(value1);
-                let (value2, stype2, _) = self.get_value(value2);
-                assert!(stype1 == stype2);
+                let (value2, stype2, assembly_type2) = self.get_value(value2);
+                if *unary_operator != tacky::UnaryOperator::LogicalNot {
+                    assert!(stype1 == stype2);
+                };
                 if Self::get_assembly_type(&stype1) == AssemblyType::Double {
                     match unary_operator {
                         tacky::UnaryOperator::Negate => {
-                            let (const_0, _, _) = self.get_value(&tacky::Value::Double(-0.0));
+                            let (const_minus_0, _, _) = self.get_value(&tacky::Value::Double(-0.0));
                             let scratch =
                                 X64CodeGenerator::get_scratch_register1(&AssemblyType::Double);
 
@@ -142,7 +148,7 @@ impl X64MoiraGenerator {
                             self.moira(Instruction::Binary(
                                 BinaryOperator::BitXor,
                                 assembly_type1.clone(),
-                                const_0,
+                                const_minus_0,
                                 scratch.clone(),
                             ));
                             self.moira(Instruction::Mov(
@@ -150,6 +156,23 @@ impl X64MoiraGenerator {
                                 scratch.clone(),
                                 value2.clone(),
                             ));
+                        }
+                        tacky::UnaryOperator::LogicalNot => {
+                            let const_0 = self.get_value(&tacky::Value::Double(0.0));
+                            self.moira(Instruction::FCmp(
+                                assembly_type1.clone(),
+                                value1.clone(),
+                                const_0.0,
+                            ));
+                            self.moira(Instruction::Mov(
+                                assembly_type2.clone(),
+                                Self::generate_signed_immediate(assembly_type2, 0),
+                                value2.clone(),
+                            ));
+                            let exit_label = self.gen_label_name("$nan");
+                            self.moira(Instruction::JmpCC(CondCode::P, exit_label.clone()));
+                            self.moira(Instruction::SetCC(CondCode::E, value2.clone()));
+                            self.moira(Instruction::Label(exit_label.clone()));
                         }
                         _ => todo!(),
                     }
@@ -196,20 +219,42 @@ impl X64MoiraGenerator {
             }
             tacky::Instruction::JumpIfZero(value, label) => {
                 let (value, _stype, assembly_type) = self.get_value(value);
-                self.moira(Instruction::Cmp(
-                    assembly_type.clone(),
-                    Self::generate_signed_immediate(assembly_type, 0),
-                    value.clone(),
-                ));
-                self.moira(Instruction::JmpCC(CondCode::E, label.clone()));
+                if assembly_type == AssemblyType::Double {
+                    let (const_0, _, _) = self.get_value(&tacky::Value::Double(0.0));
+                    self.moira(Instruction::FCmp(
+                        assembly_type.clone(),
+                        value.clone(),
+                        const_0,
+                    ));
+                    let exit_label = self.gen_label_name("$nan");
+                    self.moira(Instruction::JmpCC(CondCode::P, exit_label.clone()));
+                    self.moira(Instruction::JmpCC(CondCode::E, label.clone()));
+                    self.moira(Instruction::Label(exit_label.clone()));
+                } else {
+                    self.moira(Instruction::Cmp(
+                        assembly_type.clone(),
+                        Self::generate_signed_immediate(assembly_type, 0),
+                        value.clone(),
+                    ));
+                    self.moira(Instruction::JmpCC(CondCode::E, label.clone()));
+                }
             }
             tacky::Instruction::JumpIfNotZero(value, label) => {
                 let (value, _stype, assembly_type) = self.get_value(value);
-                self.moira(Instruction::Cmp(
-                    assembly_type.clone(),
-                    Self::generate_signed_immediate(assembly_type, 0),
-                    value.clone(),
-                ));
+                if assembly_type == AssemblyType::Double {
+                    let (const_0, _, _) = self.get_value(&tacky::Value::Double(0.0));
+                    self.moira(Instruction::FCmp(
+                        assembly_type.clone(),
+                        value.clone(),
+                        const_0,
+                    ));
+                } else {
+                    self.moira(Instruction::Cmp(
+                        assembly_type.clone(),
+                        Self::generate_signed_immediate(assembly_type, 0),
+                        value.clone(),
+                    ));
+                }
                 self.moira(Instruction::JmpCC(CondCode::NE, label.clone()));
             }
             tacky::Instruction::Label(label) => {
@@ -241,34 +286,27 @@ impl X64MoiraGenerator {
                         let arg = &args[(args.len() - idx) + 3];
                         let (argval, _arg_stype, arg_assembly_type) = self.get_value(arg);
                         match argval {
-                            Operand::ImmediateI32(v) => {
-                                self.moira(Instruction::Push(Operand::ImmediateI32(v)))
+                            Operand::ImmediateI32(_)
+                            | Operand::ImmediateI64(_)
+                            | Operand::ImmediateU32(_)
+                            | Operand::ImmediateU64(_) => {
+                                self.moira(Instruction::Push(argval.clone()))
                             }
-                            Operand::ImmediateI64(v) => {
-                                self.moira(Instruction::Push(Operand::ImmediateI64(v)))
+                            Operand::Pseudo(_) | Operand::Data(_) => {
+                                if arg_assembly_type == AssemblyType::Double
+                                    || arg_assembly_type == AssemblyType::QuadWord
+                                {
+                                    self.moira(Instruction::Push(argval.clone()))
+                                } else {
+                                    self.moira(Instruction::Mov(
+                                        arg_assembly_type,
+                                        argval,
+                                        Operand::Register(Register::RAX),
+                                    ));
+                                    self.moira(Instruction::Push(Operand::Register(Register::RAX)));
+                                }
                             }
-                            Operand::ImmediateU32(v) => {
-                                self.moira(Instruction::Push(Operand::ImmediateU32(v)))
-                            }
-                            Operand::ImmediateU64(v) => {
-                                self.moira(Instruction::Push(Operand::ImmediateU64(v)))
-                            }
-                            Operand::Pseudo(v) => {
-                                self.moira(Instruction::Mov(
-                                    arg_assembly_type,
-                                    Operand::Pseudo(v.clone()),
-                                    Operand::Register(Register::RAX),
-                                ));
-                                self.moira(Instruction::Push(Operand::Register(Register::RAX)));
-                            }
-                            Operand::Data(v) => {
-                                self.moira(Instruction::Mov(
-                                    arg_assembly_type,
-                                    Operand::Data(v.clone()),
-                                    Operand::Register(Register::RAX),
-                                ));
-                                self.moira(Instruction::Push(Operand::Register(Register::RAX)));
-                            }
+
                             _ => panic!("Invalid Operand"),
                         }
                     }
@@ -277,11 +315,12 @@ impl X64MoiraGenerator {
                 self.moira(Instruction::Call(name.clone()));
                 self.moira(Instruction::DeallocateStack(stack_delta));
 
-                self.moira(Instruction::Mov(
-                    ret_assembly_type,
-                    Operand::Register(Register::RAX),
-                    dest,
-                ));
+                let ret_reg = if ret_assembly_type == AssemblyType::Double {
+                    Operand::Register(Register::XMM0)
+                } else {
+                    Operand::Register(Register::RAX)
+                };
+                self.moira(Instruction::Mov(ret_assembly_type, ret_reg, dest));
             }
 
             tacky::Instruction::SignExtend(src, dest) => {
@@ -318,20 +357,143 @@ impl X64MoiraGenerator {
                 let (src, _src_stype, src_assembly_type) = self.get_value(src);
                 let (dest, _dest_stype, _) = self.get_value(dest);
                 self.moira(Instruction::Cvtsi2sd(src_assembly_type, src, dest));
-                //   self.moira(Instruction::Mov(AssemblyType::QuadWord, src, dest));
-                todo!();
             }
             tacky::Instruction::DoubleToUInt(src, dest) => {
-                let (src, _src_stype, _) = self.get_value(src);
+                let (src, src_stype, _) = self.get_value(src);
                 let (dest, _dest_stype, _) = self.get_value(dest);
-                //   self.moira(Instruction::Mov(AssemblyType::QuadWord, src, dest));
-                todo!();
+                let scratch_double = X64CodeGenerator::get_scratch_register1(&AssemblyType::Double);
+                if src_stype == SymbolType::UInt32 {
+                    self.moira(Instruction::Cvttsdsi(
+                        AssemblyType::QuadWord,
+                        src,
+                        scratch_double.clone(),
+                    ));
+                    self.moira(Instruction::Mov(
+                        AssemblyType::LongWord,
+                        scratch_double,
+                        dest.clone(),
+                    ));
+                } else {
+                    let label1 = self.gen_label_name("$fp1");
+                    let label2 = self.gen_label_name("$fp2");
+                    let scratch_int =
+                        X64CodeGenerator::get_scratch_register1(&AssemblyType::QuadWord);
+                    let (const_max, _, _) =
+                        self.get_value(&tacky::Value::Double(9223372036854775808.0));
+                    self.moira(Instruction::FCmp(
+                        AssemblyType::Double,
+                        const_max.clone(),
+                        src.clone(),
+                    ));
+                    self.moira(Instruction::JmpCC(CondCode::AE, label1.clone()));
+                    self.moira(Instruction::Cvttsdsi(
+                        AssemblyType::QuadWord,
+                        src.clone(),
+                        dest.clone(),
+                    ));
+                    self.moira(Instruction::Jmp(label2.clone()));
+                    self.moira(Instruction::Label(label1.clone()));
+                    self.moira(Instruction::Mov(
+                        AssemblyType::Double,
+                        src,
+                        scratch_double.clone(),
+                    ));
+                    self.moira(Instruction::Binary(
+                        BinaryOperator::FSub,
+                        AssemblyType::Double,
+                        const_max.clone(),
+                        scratch_double.clone(),
+                    ));
+                    self.moira(Instruction::Cvttsdsi(
+                        AssemblyType::QuadWord,
+                        scratch_double,
+                        dest.clone(),
+                    ));
+                    self.moira(Instruction::Mov(
+                        AssemblyType::QuadWord,
+                        Operand::ImmediateU64(9223372036854775808),
+                        scratch_int.clone(),
+                    ));
+                    self.moira(Instruction::Binary(
+                        BinaryOperator::Add,
+                        AssemblyType::QuadWord,
+                        scratch_int.clone(),
+                        dest.clone(),
+                    ));
+                    self.moira(Instruction::Label(label2.clone()));
+                }
             }
             tacky::Instruction::UIntToDouble(src, dest) => {
-                let (src, _src_stype, _) = self.get_value(src);
-                let (dest, _dest_stype, _) = self.get_value(dest);
-                //   self.moira(Instruction::Mov(AssemblyType::QuadWord, src, dest));
-                todo!();
+                let (src, src_stype, _) = self.get_value(src);
+                let (dest, dest_stype, _) = self.get_value(dest);
+                if src_stype == SymbolType::UInt32 {
+                    let scratch = X64CodeGenerator::get_scratch_register1(&AssemblyType::QuadWord);
+                    self.moira(Instruction::Mov(
+                        AssemblyType::LongWord,
+                        src,
+                        scratch.clone(),
+                    ));
+                    self.moira(Instruction::Cvtsi2sd(AssemblyType::QuadWord, scratch, dest));
+                } else {
+                    let label1 = self.gen_label_name("$fp1");
+                    let label2 = self.gen_label_name("$fp2");
+                    let scratch1 = X64CodeGenerator::get_scratch_register1(&AssemblyType::QuadWord);
+                    let scratch2 = X64CodeGenerator::get_scratch_register2(&AssemblyType::QuadWord);
+
+                    self.moira(Instruction::Cmp(
+                        AssemblyType::QuadWord,
+                        Self::generate_signed_immediate(AssemblyType::QuadWord, 0),
+                        src.clone(),
+                    ));
+                    self.moira(Instruction::JmpCC(CondCode::L, label1.clone()));
+                    self.moira(Instruction::Cvtsi2sd(
+                        AssemblyType::QuadWord,
+                        src.clone(),
+                        dest.clone(),
+                    ));
+                    self.moira(Instruction::Jmp(label2.clone()));
+                    self.moira(Instruction::Label(label1.clone()));
+                    self.moira(Instruction::Mov(
+                        AssemblyType::QuadWord,
+                        src,
+                        scratch1.clone(),
+                    ));
+                    self.moira(Instruction::Mov(
+                        AssemblyType::QuadWord,
+                        scratch1.clone(),
+                        scratch2.clone(),
+                    ));
+                    self.moira(Instruction::Binary(
+                        BinaryOperator::ShiftRight,
+                        AssemblyType::QuadWord,
+                        Self::generate_signed_immediate(AssemblyType::QuadWord, 1),
+                        scratch2.clone(),
+                    ));
+                    self.moira(Instruction::Binary(
+                        BinaryOperator::BitAnd,
+                        AssemblyType::QuadWord,
+                        Self::generate_signed_immediate(AssemblyType::QuadWord, 1),
+                        scratch1.clone(),
+                    ));
+                    self.moira(Instruction::Binary(
+                        BinaryOperator::BitOr,
+                        AssemblyType::QuadWord,
+                        scratch1.clone(),
+                        scratch2.clone(),
+                    ));
+                    self.moira(Instruction::Cvtsi2sd(
+                        AssemblyType::QuadWord,
+                        scratch2,
+                        dest.clone(),
+                    ));
+                    self.moira(Instruction::Binary(
+                        BinaryOperator::FAdd,
+                        AssemblyType::Double,
+                        dest.clone(),
+                        dest.clone(),
+                    ));
+                    self.moira(Instruction::Label(label2.clone()));
+                }
             }
         }
         Ok(())
@@ -377,11 +539,7 @@ impl X64MoiraGenerator {
                     | tacky::BinaryOperator::GreaterThanOrEqual => {
                         assert!(src1_stype == src2_stype);
                         self.moira(Instruction::FCmp(assembly_type.clone(), src2, src1));
-                        self.moira(Instruction::Mov(
-                            AssemblyType::LongWord,
-                            Self::generate_signed_immediate(AssemblyType::LongWord, 0),
-                            dest.clone(),
-                        ));
+
                         let cc = match binary_operator {
                             tacky::BinaryOperator::Equal => CondCode::E,
                             tacky::BinaryOperator::NotEqual => CondCode::NE,
@@ -391,7 +549,20 @@ impl X64MoiraGenerator {
                             tacky::BinaryOperator::GreaterThanOrEqual => CondCode::AE,
                             _ => unreachable!(),
                         };
+                        let nan_val = if *binary_operator == tacky::BinaryOperator::NotEqual {
+                            Self::generate_signed_immediate(AssemblyType::LongWord, 1)
+                        } else {
+                            Self::generate_signed_immediate(AssemblyType::LongWord, 0)
+                        };
+                        self.moira(Instruction::Mov(
+                            AssemblyType::LongWord,
+                            nan_val,
+                            dest.clone(),
+                        ));
+                        let exit_label = self.gen_label_name("$nan");
+                        self.moira(Instruction::JmpCC(CondCode::P, exit_label.clone()));
                         self.moira(Instruction::SetCC(cc, dest));
+                        self.moira(Instruction::Label(exit_label.clone()));
                     }
                     __ => {
                         unreachable!();
@@ -515,6 +686,25 @@ impl X64MoiraGenerator {
             Ok(())
         }
     }
+
+    pub fn make_static_constant(&mut self, value: f64) -> String {
+        let strval = format!("{:?}", value).replace('-', "_");
+        let const_label = if let Some(v) = self.moira.static_constants.get(&strval) {
+            v.name.clone()
+        } else {
+            let const_label = format!("__const_{}", strval);
+            self.moira.static_constants.insert(
+                strval.clone(),
+                StaticConstant {
+                    name: const_label.clone(),
+                    value: tacky::StaticInit::InitDouble(value.clone()),
+                    align: 16,
+                },
+            );
+            const_label
+        };
+        const_label
+    }
     fn get_value(&mut self, value: &crate::tacky::Value) -> (Operand, SymbolType, AssemblyType) {
         match value {
             tacky::Value::Int32(value) => (
@@ -538,21 +728,7 @@ impl X64MoiraGenerator {
                 AssemblyType::QuadWord,
             ),
             tacky::Value::Double(value) => {
-                let strval = format!("{:?}", value).replace('-', "_");
-                let const_label = if let Some(v) = self.moira.static_constants.get(&strval) {
-                    v.name.clone()
-                } else {
-                    let const_label = format!("__const_{}", strval);
-                    self.moira.static_constants.insert(
-                        strval.clone(),
-                        StaticConstant {
-                            name: const_label.clone(),
-                            value: tacky::StaticInit::InitDouble(value.clone()),
-                            align: 16,
-                        },
-                    );
-                    const_label
-                };
+                let const_label = self.make_static_constant(*value);
                 let dest = Operand::Data(const_label);
 
                 (dest, SymbolType::Double, AssemblyType::Double)

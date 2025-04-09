@@ -62,7 +62,24 @@ where
         self.current_function = self.functions.len() - 1;
         Ok(())
     }
-
+    // pub fn make_static_constant(&mut self, value: f64) -> String {
+    //     let strval = format!("{:?}", value).replace('-', "_");
+    //     let const_label = if let Some(v) = self.static_constants.get(&strval) {
+    //         v.name.clone()
+    //     } else {
+    //         let const_label = format!("__const_{}", strval);
+    //         self.static_constants.insert(
+    //             strval.clone(),
+    //             StaticConstant {
+    //                 name: const_label.clone(),
+    //                 value: StaticInit::InitDouble(value.clone()),
+    //                 align: 16,
+    //             },
+    //         );
+    //         const_label
+    //     };
+    //     const_label
+    // }
     pub(crate) fn add_instruction(&mut self, instruction: TInst) {
         //  if let Instruction::Mov(a, o1, o2) = instruction {}
         self.functions[self.current_function]
