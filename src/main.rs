@@ -1,26 +1,26 @@
 pub mod codegen;
 pub mod cpp;
+pub mod declarator;
 pub mod expr;
 pub mod lexer;
-pub mod moira;
 pub mod parser;
+pub mod symbols;
 pub mod tacky;
 
-pub mod x64 {
-    pub mod moira_inst;
-    pub mod moiragen;
-    pub mod nasmgen;
-}
-
-use crate::codegen::MoiraGenerator;
-use crate::x64::nasmgen::X64CodeGenerator;
+// pub mod x64 {
+//     pub mod moira;
+//     pub mod moira_inst;
+//     pub mod moiragen;
+//     pub mod nasmgen;
+// }
+pub mod x64;
 use anyhow::Result;
-use codegen::MoiraCompiler;
+use codegen::BackEnd;
 use log::{info, LevelFilter};
 use simplelog::{CombinedLogger, Config, WriteLogger};
 use std::env;
 use std::fs::File;
-use x64::moiragen::X64MoiraGenerator;
+use x64::moiragen::X64BackEnd;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -116,9 +116,7 @@ fn main() -> ExitCode {
     }
     cli.source.set_extension("exe");
     match build(&preproc_output, &cli.source, &cli.source, cli.compile_only) {
-        Ok(()) => {
-            ExitCode::SUCCESS
-        }
+        Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("build error {:?}", e);
             ExitCode::FAILURE
@@ -150,17 +148,11 @@ fn codegen(path: &Path, real_source: &Path) -> Result<()> {
     match tackyx {
         Ok(tacky) => {
             tacky.dump();
-            let mut gen = X64MoiraGenerator::new();
-            // let mut moira = MoiraProgram::<Instruction>::new();
-            let moira = gen.generate_moira(tacky)?;
-            moira.dump();
-
+            let mut backend = X64BackEnd::new();
             let stub = "mycc_cpp";
             // let gen_output = std::env::temp_dir().join(format!("{}.s", stub));
             let gen_output = PathBuf::from(format!("{}.asm", stub));
-            let mut gen = X64CodeGenerator::new();
-            gen.generate_asm(moira, &gen_output)?;
-            // crate::cpp::assemble_link(&gen_output, output, compile_only)?;
+            backend.compile(tacky, &gen_output)?;
         }
         Err(e) => {
             println!("Error: {:?}", e);
@@ -177,16 +169,11 @@ fn build(source: &Path, output: &Path, real_source: &Path, compile_only: bool) -
     match tackyx {
         Ok(tacky) => {
             tacky.dump();
-            let mut gen = X64MoiraGenerator::new();
-            // let mut moira = MoiraProgram::<Instruction>::new();
-            let moira = gen.generate_moira(tacky)?;
-            moira.dump();
-
+            let mut backend = X64BackEnd::new();
             let stub = "mycc_cpp";
             // let gen_output = std::env::temp_dir().join(format!("{}.s", stub));
             let gen_output = PathBuf::from(format!("{}.asm", stub));
-            let mut gen = X64CodeGenerator::new();
-            gen.generate_asm(moira, &gen_output)?;
+            backend.compile(tacky, &gen_output)?;
             crate::cpp::assemble_link(&gen_output, output, compile_only)?;
         }
         Err(e) => {

@@ -2,19 +2,21 @@ use std::collections::HashMap;
 
 use anyhow::Result;
 
-use crate::tacky::{StaticInit, SymbolType};
+use crate::{symbols::SymbolType, tacky::StaticInit};
+
+use super::moira_inst::Instruction;
 
 #[derive(Debug, Clone)]
-pub struct MoiraProgram<TInst> {
-    pub functions: Vec<Function<TInst>>,
+pub struct MoiraProgram {
+    pub functions: Vec<Function>,
     pub top_vars: Vec<StaticVariable>,
     pub static_constants: HashMap<String, StaticConstant>,
     current_function: usize,
 }
 #[derive(Debug, Clone)]
-pub struct Function<TInst> {
+pub struct Function {
     pub name: String,
-    pub instructions: Vec<TInst>,
+    pub instructions: Vec<Instruction>,
     pub global: bool,
 }
 #[derive(Debug, Clone)]
@@ -31,19 +33,8 @@ pub struct StaticConstant {
     pub align: u8,
     pub value: StaticInit,
 }
-impl<TInst> Default for MoiraProgram<TInst>
-where
-    TInst: std::fmt::Debug + Clone,
-{
-    fn default() -> Self {
-        Self::new()
-    }
-}
 
-impl<TInst> MoiraProgram<TInst>
-where
-    TInst: std::fmt::Debug + Clone,
-{
+impl MoiraProgram {
     pub fn new() -> Self {
         MoiraProgram {
             functions: Vec::new(),
@@ -62,25 +53,8 @@ where
         self.current_function = self.functions.len() - 1;
         Ok(())
     }
-    // pub fn make_static_constant(&mut self, value: f64) -> String {
-    //     let strval = format!("{:?}", value).replace('-', "_");
-    //     let const_label = if let Some(v) = self.static_constants.get(&strval) {
-    //         v.name.clone()
-    //     } else {
-    //         let const_label = format!("__const_{}", strval);
-    //         self.static_constants.insert(
-    //             strval.clone(),
-    //             StaticConstant {
-    //                 name: const_label.clone(),
-    //                 value: StaticInit::InitDouble(value.clone()),
-    //                 align: 16,
-    //             },
-    //         );
-    //         const_label
-    //     };
-    //     const_label
-    // }
-    pub(crate) fn add_instruction(&mut self, instruction: TInst) {
+
+    pub(crate) fn add_instruction(&mut self, instruction: Instruction) {
         //  if let Instruction::Mov(a, o1, o2) = instruction {}
         self.functions[self.current_function]
             .instructions

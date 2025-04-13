@@ -1,6 +1,5 @@
 use anyhow::{bail, Result};
 use backtrace::{Backtrace, BacktraceFrame, BacktraceSymbol};
-use enum_as_inner::EnumAsInner;
 
 use std::{
     collections::{HashMap, VecDeque},
@@ -8,68 +7,12 @@ use std::{
     path::{Path, PathBuf},
 };
 
-// https://users.rust-lang.org/t/how-to-parameterize-a-function-or-macro-by-enum-variant/126398
-
-macro_rules! expect {
-    ($lexer:expr,$token:path) => {
-        match $lexer.next_token() {
-            Ok($token(data)) => data,
-            Err(e) => return Err(e),
-            t => bail!("Expected {e:?}, got {t:?}", e = stringify!($token)),
-        }
-    };
-}
-
 use crate::{
+    expect,
     lexer::{Lexer, Token},
-    tacky::{BinaryOperator, Instruction, SymbolType, TackyProgram, Value},
+    symbols::{Extern, Specifiers, Symbol, SymbolLinkage, SymbolState, SymbolType, VariableName},
+    tacky::{BinaryOperator, Instruction, TackyProgram, Value},
 };
-#[derive(Debug, Clone)]
-pub(crate) struct VariableName {
-    pub(crate) name: String,
-    pub(crate) is_current: bool,
-}
-#[derive(Debug, Clone)]
-pub struct Specifiers {
-    pub is_static: bool,
-    pub is_external: bool,
-    pub specified_type: Option<SymbolType>,
-}
-#[derive(Debug, Clone, PartialEq, EnumAsInner)]
-pub(crate) enum SymbolDetails {
-    Function {
-        return_type: SymbolType,
-        args: Vec<SymbolType>,
-    },
-    //
-    Variable {
-        rename: String,
-        stype: SymbolType,
-        value: Option<Value>, //TODO - remove this
-    },
-    ScopePull,
-}
-#[derive(Debug, Clone, PartialEq)]
-pub enum SymbolState {
-    Defined,
-    Declared,
-    Tentative,
-}
-#[derive(Debug, Clone, PartialEq)]
-pub enum SymbolLinkage {
-    External,
-
-    Internal,
-    None, //loalc stack var
-}
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct Symbol {
-    pub(crate) name: String,
-    pub(crate) state: SymbolState,
-    pub(crate) details: SymbolDetails,
-    linkage: SymbolLinkage,
-    explicit_external: bool,
-}
 
 struct SwitchContext {
     cases: Vec<Value>,
@@ -80,14 +23,7 @@ struct SwitchContext {
     next_case_label: String,
     next_drop_thru_label: String,
 }
-#[derive(Debug, Clone)]
-struct Extern {
-    name: String,
-    linkage: SymbolLinkage,
-    state: SymbolState,
-    value: Option<Value>,
-    stype: SymbolType,
-}
+
 pub struct Parser {
     lexer: Lexer,
     source_file: PathBuf,
@@ -177,144 +113,13 @@ impl Parser {
         Ok(())
     }
 
-    pub fn load_specifiers(&mut self) -> Result<Specifiers> {
-        let mut specifiers = Specifiers {
-            is_static: false,
-            is_external: false,
-            specified_type: None, // SymbolType::Int,
-        };
-        let mut long_count = 0;
-        let mut int_count = 0;
-        let mut signed_count = 0;
-        let mut unsigned_count = 0;
-        let mut double_count = 0;
-
-        loop {
-            let token = self.peek()?;
-            match token {
-                Token::Double => {
-                    self.next_token()?;
-                    if double_count > 0 {
-                        bail!("Duplicate double specifier");
-                    }
-                    double_count += 1;
-                }
-                Token::Int => {
-                    self.next_token()?;
-                    int_count += 1;
-                }
-                Token::Long => {
-                    if long_count > 0 {
-                        bail!("Duplicate long specifier");
-                    }
-                    long_count += 1;
-                    self.next_token()?;
-                    loop {
-                        let token = self.peek()?;
-                        if token == Token::Long {
-                            self.next_token()?;
-                            long_count += 1;
-                        } else {
-                            break;
-                        }
-                    }
-                }
-                Token::Signed => {
-                    self.next_token()?;
-                    if signed_count > 0 {
-                        bail!("Duplicate signed specifier");
-                    }
-                    if unsigned_count > 0 {
-                        bail!("signed and unsigned cannot be used together");
-                    }
-                    signed_count += 1;
-                }
-                Token::Unsigned => {
-                    self.next_token()?;
-                    if unsigned_count > 0 {
-                        bail!("Duplicate unsigned specifier");
-                    }
-                    if signed_count > 0 {
-                        bail!("signed and unsigned cannot be used together");
-                    }
-                    unsigned_count += 1;
-                }
-                Token::Void => {
-                    self.next_token()?;
-                    if specifiers.specified_type.is_some() {
-                        bail!("Duplicate void specifier");
-                    }
-                }
-                Token::Extern => {
-                    self.next_token()?;
-                    if specifiers.is_external {
-                        bail!("Duplicate extern specifier");
-                    }
-                    specifiers.is_external = true;
-                }
-                Token::Static => {
-                    self.next_token()?;
-                    if specifiers.is_static {
-                        bail!("Duplicate static specifier");
-                    }
-                    specifiers.is_static = true;
-                }
-                _ => break,
-            };
-        }
-        if double_count > 0 {
-            if long_count > 0 {
-                bail!("long and double cannot be used together");
-            }
-            if int_count > 0 {
-                bail!("int and double cannot be used together");
-            }
-            if signed_count > 0 {
-                bail!("signed and double cannot be used together");
-            }
-            if unsigned_count > 0 {
-                bail!("unsigned and double cannot be used together");
-            }
-            specifiers.specified_type = Some(SymbolType::Double);
-            return Ok(specifiers);
-        }
-        if unsigned_count > 0 {
-            match (long_count, int_count) {
-                (0, 0) => specifiers.specified_type = Some(SymbolType::UInt32),
-                (1, 1) => specifiers.specified_type = Some(SymbolType::UInt32),
-                (1, 0) => specifiers.specified_type = Some(SymbolType::UInt32),
-                (2, 0) => specifiers.specified_type = Some(SymbolType::UInt64),
-                (2, 1) => specifiers.specified_type = Some(SymbolType::UInt64),
-                (0, 1) => specifiers.specified_type = Some(SymbolType::UInt32),
-                _ => bail!("Invalid type specifier"),
-            }
-        } else {
-            match (long_count, int_count) {
-                (0, 0) => {
-                    specifiers.specified_type = if signed_count > 0 {
-                        Some(SymbolType::Int32)
-                    } else {
-                        None
-                    }
-                }
-                (1, 1) => specifiers.specified_type = Some(SymbolType::Int32),
-                (1, 0) => specifiers.specified_type = Some(SymbolType::Int32),
-                (2, 0) => specifiers.specified_type = Some(SymbolType::Int64),
-                (2, 1) => specifiers.specified_type = Some(SymbolType::Int64),
-                (0, 1) => specifiers.specified_type = Some(SymbolType::Int32),
-                _ => bail!("Invalid type specifier"),
-            }
-        }
-        Ok(specifiers)
-    }
     fn do_function_or_variable(&mut self, func_allowed: bool, body_allowed: bool) -> Result<bool> {
         // three possible normal outcomes
         // this is a function, the heavy lifting is done here => true
         // this is a variable declartion, passed to do_variable_dec => true
         // this is a statment => false
 
-        // scan the specifiers first
-        let specifiers = self.load_specifiers()?;
+        let (specifiers, func_dec_name, stype, param_names) = self.parse_declaration()?;
 
         if !specifiers.is_static && !specifiers.is_external && specifiers.specified_type.is_none() {
             // its a statement, only allowed in functions
@@ -326,21 +131,25 @@ impl Parser {
         if !func_allowed && (specifiers.is_external || specifiers.is_static) {
             bail!("static or external not allowed here");
         }
-        let func_dec_name = expect!(self, Token::Identifier);
+
         println!("Function or dec: {}", func_dec_name);
         if specifiers.specified_type.is_none() {
             bail!("type not specified for {}", func_dec_name);
         }
 
-        // if next token is "(" then its a function, otherwise its a variable
-        let token = self.peek()?;
-        if token != Token::LeftParen {
-            self.do_variable_dec(&func_dec_name, &specifiers)?;
+        if !stype.is_function() {
+            self.do_variable_dec(&func_dec_name, &specifiers, &stype)?;
         } else {
             if !func_allowed {
                 bail!("Function declaration not allowed here");
             }
-            self.do_function(&func_dec_name, &specifiers, body_allowed)?;
+            self.do_function(
+                &func_dec_name,
+                &specifiers,
+                body_allowed,
+                &stype,
+                param_names,
+            )?;
         }
         Ok(true)
     }
@@ -349,6 +158,8 @@ impl Parser {
         name: &str,
         specifiers: &Specifiers,
         body_allowed: bool,
+        stype: &SymbolType,
+        param_names: Vec<String>,
     ) -> Result<()> {
         let explicit_external = specifiers.is_external;
         // table 10.2
@@ -366,61 +177,7 @@ impl Parser {
             (false, false, true) => SymbolLinkage::External,
         };
         self.current_function_name = name.to_string();
-        let return_type = specifiers.specified_type.as_ref().unwrap().clone();
-        let mut symbol_det = SymbolDetails::Function {
-            return_type: return_type.clone(),
-            args: Vec::new(),
-        };
-        let arg_types = &mut symbol_det.as_function_mut().unwrap().1;
-        self.expect(Token::LeftParen)?;
 
-        let mut arg_names_and_types: Vec<(String, SymbolType)> = Vec::new();
-        //let mut arg_types = Vec::new();
-
-        loop {
-            let token = self.peek()?;
-            if token == Token::RightParen {
-                self.next_token()?;
-                break;
-            }
-
-            let arg_specifiers = self.load_specifiers()?;
-            if arg_specifiers.is_static || arg_specifiers.is_external {
-                bail!("Function argument cannot be static or external");
-            }
-            if arg_specifiers.specified_type.is_none() {
-                //  bail!("Function argument type not specified");
-                // void
-                self.next_token()?;
-                break;
-            }
-            let token = self.peek()?;
-            if let Token::Identifier(name) = token {
-                let arg_type = arg_specifiers.specified_type.as_ref().unwrap().clone();
-                if arg_names_and_types.iter().any(|(n, _)| *n == name) {
-                    bail!("Duplicate argument name {}", name);
-                }
-                arg_names_and_types.push((name.to_string(), arg_type.clone()));
-
-                arg_types.push(arg_type);
-                self.next_token()?;
-            }
-            let token = self.next_token()?;
-            match token {
-                Token::RightParen => {
-                    break;
-                }
-                Token::Comma => {
-                    if self.peek()? == Token::RightParen {
-                        bail!("redundant comma in function declaration");
-                    }
-                    continue;
-                }
-                _ => {
-                    bail!("Expected Comma or RightParen, got {:?}", token);
-                }
-            }
-        }
         let token = self.peek()?;
 
         let definition = if token == Token::SemiColon {
@@ -460,19 +217,19 @@ impl Parser {
                     ),
                 }
             }
-            match &found.details {
-                SymbolDetails::Function { return_type, args } => {
+            match &found.stype {
+                SymbolType::Function(args, return_type) => {
                     // we know this function already exists, so check the args and return type
-                    if *return_type != SymbolType::Int32 {
+                    if **return_type != **stype.as_function().unwrap().1 {
                         bail!(
-                            "Function {} already declared with different return type",
+                            "Function {}  already declared with different return type",
                             name
                         );
                     }
-                    if args != *arg_types {
+                    if args != stype.as_function().unwrap().0 {
                         bail!("Function {} already declared with different args", name);
                     }
-                    if found.state == SymbolState::Defined && top {
+                    if found.state == SymbolState::Defined && top && definition {
                         bail!("Function {} already defined", name);
                     };
                     if definition {
@@ -482,11 +239,14 @@ impl Parser {
                     }
                     false
                 }
-                SymbolDetails::Variable {
-                    rename: _,
-                    stype: _,
-                    value: _,
-                } => {
+                &SymbolType::Pointer(_) => {
+                    bail!("Function {} already declared as pointer", name);
+                }
+                SymbolType::Double
+                | SymbolType::Int32
+                | SymbolType::Int64
+                | SymbolType::UInt32
+                | SymbolType::UInt64 => {
                     println!("{:?} {:?}", top, found);
                     if linkage == SymbolLinkage::External
                         && found.linkage == SymbolLinkage::External
@@ -500,13 +260,6 @@ impl Parser {
                         bail!("Function {} already declared as variable1", name);
                     }
                     true
-                }
-                _ => {
-                    if top {
-                        bail!("duplicated name in same scope");
-                    } else {
-                        true
-                    }
                 }
             }
         } else {
@@ -524,9 +277,11 @@ impl Parser {
             } else {
                 SymbolState::Declared
             },
-            details: symbol_det.clone(),
+            stype: stype.clone(),
+            rename: name.to_string(),
             linkage: linkage.clone(),
             explicit_external,
+            scope_pull: false,
         };
         if new_func {
             // new function, so add it to the symbol table
@@ -552,7 +307,10 @@ impl Parser {
         self.local_variables.push(HashMap::new());
         self.in_function_body = true;
         self.push_symbols();
-        for (arg_name, arg_type) in arg_names_and_types {
+        for (arg_name, arg_type) in param_names
+            .iter()
+            .zip(symbol.stype.into_function().unwrap().0.iter())
+        {
             let new_name = self.make_newname(&arg_name);
             new_names.push((new_name.clone(), arg_type.clone()));
             self.local_variables().insert(
@@ -566,12 +324,11 @@ impl Parser {
                 name: arg_name.to_string(),
                 state: SymbolState::Defined,
                 linkage: SymbolLinkage::None,
-                details: SymbolDetails::Variable {
-                    rename: new_name.to_string(),
-                    stype: arg_type.clone(),
-                    value: None,
-                },
+
+                rename: new_name.to_string(),
+                stype: arg_type.clone(),
                 explicit_external,
+                scope_pull: false,
             };
             self.insert_symbol(&arg_name, symbol);
         }
@@ -580,7 +337,7 @@ impl Parser {
             name,
             &new_names,
             linkage == SymbolLinkage::External,
-            return_type,
+            *stype.as_function().unwrap().1.clone(),
         );
 
         self.do_function_body()?;
@@ -617,16 +374,21 @@ impl Parser {
         Ok(())
     }
 
-    fn do_variable_dec(&mut self, name: &str, specifiers: &Specifiers) -> Result<()> {
+    fn do_variable_dec(
+        &mut self,
+        name: &str,
+        specifiers: &Specifiers,
+        symbol_type: &SymbolType,
+    ) -> Result<()> {
         let spec_ext = specifiers.is_external;
         let spec_static = specifiers.is_static;
         let explicit_external = spec_ext;
         if specifiers.specified_type.is_none() {
             bail!("missing type");
         }
-        let symbol_type = specifiers.specified_type.clone().unwrap().clone();
+        let symbol_type = symbol_type.clone(); //specifiers.specified_type.clone().unwrap().clone();
         let token = self.peek()?;
-        let init = if token == Token::Equals {
+        let init = if token == Token::Assign {
             self.next_token()?;
             true
         } else {
@@ -755,11 +517,11 @@ impl Parser {
                 }
             }
         }
-        let (mut symbol, top) = if let Some((symbol, top)) = sym_look {
-            if symbol.details.is_function() && top {
+        let (mut found_symbol, top) = if let Some((symbol, top)) = sym_look {
+            if symbol.stype.is_function() && top {
                 bail!("Variable {} already declared as function", name);
             }
-            if symbol.details.is_function()
+            if symbol.stype.is_function()
                 && symbol.linkage == SymbolLinkage::External
                 && explicit_external
             {
@@ -771,24 +533,16 @@ impl Parser {
             if symbol.linkage != linkage && top && symbol.linkage != SymbolLinkage::Internal {
                 bail!("Variable {} linkage mismatch", name);
             }
-            if let SymbolDetails::Variable {
-                rename: _,
-                ref stype,
-                ref value,
-            } = symbol.details
-            {
-                if *stype != symbol_type {
-                    bail!(
-                        "Variable {} type mismatch {:?} {:?}",
-                        name,
-                        stype,
-                        symbol_type
-                    );
-                }
-                if value.is_some() && init {
-                    bail!("Variable {} already initialized", name);
-                }
+
+            if symbol.stype != symbol_type && (top || explicit_external) {
+                bail!(
+                    "Variable {} type mismatch {:?} {:?}",
+                    name,
+                    symbol.stype,
+                    symbol_type
+                );
             }
+
             (Some(symbol), top)
         } else {
             (None, false)
@@ -796,22 +550,22 @@ impl Parser {
         println!(
             "do_variable_dec {:?} existing = {:?} {}",
             name,
-            symbol.clone(),
+            found_symbol.clone(),
             top
         );
-        let _this_symbol = match (&mut symbol, &linkage) {
+        let _this_symbol = match (&mut found_symbol, &linkage) {
             // simple case, we have a new variable, so add it to the symbol table
             (None, _) => {
                 let new_sym = Symbol {
                     name: name.to_string(),
                     state: state.clone(),
                     linkage: linkage.clone(),
-                    details: SymbolDetails::Variable {
-                        rename: rename.to_string(),
-                        stype: symbol_type.clone(),
-                        value: None,
-                    },
+
+                    rename: rename.to_string(),
+                    stype: symbol_type.clone(),
+                    //  value: None,
                     explicit_external,
+                    scope_pull: false,
                 };
                 if linkage == SymbolLinkage::External && !self.in_function_body {
                     self.insert_global_symbol(name, new_sym.clone());
@@ -844,12 +598,12 @@ impl Parser {
                                 state.clone()
                             },
                             linkage: linkage.clone(),
-                            details: SymbolDetails::Variable {
-                                rename: rename.to_string(),
-                                stype: symbol_type.clone(),
-                                value: None,
-                            },
+
+                            rename: rename.to_string(),
+                            stype: symbol_type.clone(),
+                            // value: None,
                             explicit_external,
+                            scope_pull: false,
                         };
                         self.insert_global_symbol(name, new_sym.clone());
                         new_sym.clone()
@@ -860,8 +614,11 @@ impl Parser {
                         state: SymbolState::Declared,
                         name: name.to_string(),
                         linkage: linkage.clone(),
-                        details: SymbolDetails::ScopePull,
+
                         explicit_external,
+                        rename: rename.to_string(),
+                        stype: symbol_type.clone(),
+                        scope_pull: true,
                     };
 
                     self.insert_symbol(name, pull_sym.clone());
@@ -875,12 +632,11 @@ impl Parser {
                     state: state.clone(),
                     name: name.to_string(),
                     linkage: linkage.clone(),
-                    details: SymbolDetails::Variable {
-                        rename: rename.clone(),
-                        stype: symbol_type.clone(),
-                        value: None,
-                    },
+
+                    rename: rename.clone(),
+                    stype: symbol_type.clone(),
                     explicit_external,
+                    scope_pull: false,
                 };
                 self.insert_symbol(name, new_sym.clone());
                 self.dump_symbols();
@@ -894,10 +650,10 @@ impl Parser {
         };
 
         if init {
-            let val = self.do_expression(0)?;
+            let val = self.do_expression(0)?.as_plain_value().unwrap().clone();
             if self.in_function_body && is_auto {
                 //
-                let converted = self.convert_to(&val, &symbol_type);
+                let converted = self.convert_by_assignment(&val, &symbol_type)?;
                 self.instruction(Instruction::Copy(
                     converted,
                     Value::Variable(rename, symbol_type),
@@ -907,7 +663,7 @@ impl Parser {
                     bail!("Static variable must be initialized to a constant");
                 }
                 if !is_auto {
-                    let converted = self.convert_to(&val, &symbol_type);
+                    let converted = self.convert_by_assignment(&val, &symbol_type)?;
                     self.externs
                         .entry(rename.to_string())
                         .and_modify(|e| {
@@ -1029,7 +785,7 @@ impl Parser {
         let cond = if token == Token::SemiColon {
             Value::Int32(1)
         } else {
-            self.do_expression(0)?
+            self.do_expression(0)?.as_plain_value().unwrap().clone()
         };
         self.instruction(Instruction::JumpIfZero(cond, label_end.clone()));
         self.expect(Token::SemiColon)?;
@@ -1068,7 +824,7 @@ impl Parser {
 
         self.instruction(Instruction::Label(label_start.clone()));
         self.expect(Token::LeftParen)?;
-        let cond = self.do_expression(0)?;
+        let cond = self.do_expression(0)?.as_plain_value().unwrap().clone();
         self.instruction(Instruction::JumpIfZero(cond, label_end.clone()));
         self.expect(Token::RightParen)?;
         self.do_statement()?;
@@ -1093,7 +849,7 @@ impl Parser {
         self.expect(Token::While)?;
         self.expect(Token::LeftParen)?;
         self.instruction(Instruction::Label(label_cond.clone()));
-        let cond = self.do_expression(0)?;
+        let cond = self.do_expression(0)?.as_plain_value().unwrap().clone();
         self.instruction(Instruction::JumpIfZero(cond, label_end.clone()));
         self.expect(Token::RightParen)?;
         self.expect(Token::SemiColon)?;
@@ -1141,11 +897,11 @@ impl Parser {
     fn do_return(&mut self) -> Result<()> {
         self.next_token()?;
         let func_name = &self.current_function_name;
-        let func_sym = self.lookup_global_symbol(func_name).unwrap();
-        let ret_type = func_sym.0.details.as_function().unwrap().0.clone();
+        let (func_sym, _) = self.lookup_global_symbol(func_name).unwrap();
+        let ret_type = *func_sym.stype.as_function().unwrap().1.clone();
 
-        let val = self.do_expression(0)?;
-        let converted_val = self.convert_to(&val, &ret_type);
+        let val = self.do_expression(0)?.as_plain_value().unwrap().clone();
+        let converted_val = self.convert_by_assignment(&val, &ret_type)?;
         self.instruction(Instruction::Return(converted_val));
         self.expect(Token::SemiColon)?;
 
@@ -1181,7 +937,7 @@ impl Parser {
     fn do_if(&mut self) -> Result<()> {
         self.next_token()?;
         self.expect(Token::LeftParen)?;
-        let cond = self.do_expression(0)?;
+        let cond = self.do_expression(0)?.as_plain_value().unwrap().clone();
         self.expect(Token::RightParen)?;
         let label_false = self.make_label("if_false");
         let label_end = self.make_label("if_end");
@@ -1203,14 +959,14 @@ impl Parser {
         // where 'break' will go
         let label_end = self.make_label("switch_end");
         self.break_label_stack.push(label_end.clone());
-        //defer!(self.break_label_stack.pop(););
+
         let mut this = scopeguard::guard(&mut *self, |x| {
             x.break_label_stack.pop();
         });
         // evaluate the condition once
 
-        let value = this.do_expression(0)?;
-        if Self::get_type(&value) == SymbolType::Double {
+        let value = this.do_expression(0)?.as_plain_value().unwrap().clone();
+        if Self::get_type(&value) == SymbolType::Double || value.is_pointer() {
             bail!("Switch value must be an integer");
         }
         this.expect(Token::RightParen)?;
@@ -1268,7 +1024,7 @@ impl Parser {
         // then update thisxx labels to nextxx
 
         let case_value = if is_case {
-            let cv = self.do_expression(0)?;
+            let cv = self.do_expression(0)?.as_plain_value().unwrap().clone();
             if !matches!(cv, Value::Int32(_))
                 && !matches!(cv, Value::Int64(_))
                 && !matches!(cv, Value::UInt32(_))
@@ -1311,7 +1067,7 @@ impl Parser {
         if let Some(mut cv) = case_value {
             let dest = Value::Variable(self.make_temporary(), SymbolType::Int32);
             if Self::get_type(&switch_value) != Self::get_type(&cv) {
-                cv = self.convert_to(&cv, &Self::get_type(&switch_value));
+                cv = self.convert_to(&cv, &Self::get_type(&switch_value), false)?;
             }
             let context = self.switch_context_stack.last_mut().unwrap();
             if context.cases.contains(&cv) {
@@ -1347,7 +1103,10 @@ impl Parser {
     }
     pub(crate) fn is_lvalue(&mut self, value: &Value) -> bool {
         match value {
-            Value::Variable(var, _) => self.local_variables().values().any(|v| v.name == *var),
+            Value::Variable(var, _) => {
+                self.local_variables().values().any(|v| v.name == *var)
+                    || self.lookup_symbol(var).is_some()
+            }
             _ => false,
         }
     }
@@ -1399,7 +1158,7 @@ impl Parser {
         if token == Token::Eof {
             self.eof_hit = true;
         }
-
+        println!("next_token {:?}", token);
         Ok(token)
     }
     fn dump_var_map(&self) {
@@ -1434,7 +1193,9 @@ impl Parser {
         self.local_variables.get_mut(len - 1).unwrap()
     }
     pub(crate) fn peek(&mut self) -> Result<Token> {
-        self.peek_n(0)
+        let token = self.peek_n(0);
+        println!("peek {:?}", token);
+        token
     }
     pub(crate) fn lookup_symbol(&self, name: &str) -> Option<(Symbol, bool)> {
         for i in (0..self.symbol_stack.len()).rev() {

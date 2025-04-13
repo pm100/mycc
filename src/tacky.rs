@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 
+use backtrace::Symbol;
 use enum_as_inner::EnumAsInner;
 
-use crate::x64::moira_inst::AssemblyType;
+use crate::{symbols::SymbolType, x64::moira_inst::AssemblyType};
 
 pub struct TackyProgram {
     pub functions: Vec<Function>,
@@ -27,6 +28,9 @@ pub enum Instruction {
     DoubleToUInt(Value, Value),
     IntToDouble(Value, Value),
     UIntToDouble(Value, Value),
+    GetAddress(Value, Value),
+    Load(Value, Value),
+    Store(Value, Value),
 }
 #[derive(Debug, PartialEq)]
 
@@ -55,6 +59,7 @@ pub enum BinaryOperator {
     GreaterThan,
     GreaterThanOrEqual,
 }
+
 #[derive(Debug, Clone, PartialEq, EnumAsInner)]
 
 pub enum Value {
@@ -65,6 +70,15 @@ pub enum Value {
     Double(f64),
     Variable(String, SymbolType),
 }
+
+impl Value {
+    pub fn is_pointer(&self) -> bool {
+        match self {
+            Value::Variable(_, SymbolType::Pointer(_)) => true,
+            _ => false,
+        }
+    }
+}
 #[derive(Debug)]
 pub struct Function {
     pub name: String,
@@ -73,15 +87,7 @@ pub struct Function {
     pub instructions: Vec<Instruction>,
     pub global: bool,
 }
-#[derive(Debug, Clone, PartialEq)]
-pub enum SymbolType {
-    Int32,
-    Int64,
-    UInt32,
-    UInt64,
-    Double,
-    Func(Vec<SymbolType>),
-}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum StaticInit {
     InitI32(i32),
@@ -127,8 +133,12 @@ impl TackyProgram {
             Some(Value::UInt32(v)) => StaticInit::InitU32(v),
             Some(Value::UInt64(v)) => StaticInit::InitU64(v),
             Some(Value::Double(v)) => StaticInit::InitDouble(v),
+
             None => StaticInit::InitNone,
-            _ => panic!("Invalid static variable type"),
+            _ => panic!(
+                "Invalid static variable type {:?} for {}={:?}",
+                stype, name, value
+            ),
         };
 
         self.static_variables.insert(
@@ -169,7 +179,8 @@ impl TackyProgram {
                 SymbolType::Int32 | SymbolType::UInt32 => AssemblyType::LongWord,
                 SymbolType::Int64 | SymbolType::UInt64 => AssemblyType::QuadWord,
                 SymbolType::Double => AssemblyType::QuadWord,
-                SymbolType::Func(_) => AssemblyType::QuadWord, // TODO
+                SymbolType::Function(_, _) => AssemblyType::QuadWord, // TODO
+                SymbolType::Pointer(_) => AssemblyType::QuadWord,
             },
         }
     }
@@ -254,6 +265,15 @@ impl TackyProgram {
                     }
                     Instruction::UIntToDouble(src, dest) => {
                         println!("      UIntToDouble {:?} {:?}", src, dest);
+                    }
+                    Instruction::GetAddress(src, dest) => {
+                        println!("      GetAddress {:?} {:?}", src, dest);
+                    }
+                    Instruction::Load(src, dest) => {
+                        println!("      Load {:?} {:?}", src, dest);
+                    }
+                    Instruction::Store(src, dest) => {
+                        println!("      Store {:?} {:?}", src, dest);
                     }
                 }
             }

@@ -1,7 +1,8 @@
-use crate::moira::{Function, MoiraProgram, StaticConstant};
+use crate::symbols::SymbolType;
+use crate::x64::moira::{Function, MoiraProgram, StaticConstant};
 
-use crate::codegen::MoiraCompiler;
-use crate::tacky::{StaticInit, SymbolType};
+//use crate::codegen::MoiraCompiler;
+use crate::tacky::StaticInit;
 use anyhow::Result;
 use std::collections::HashMap;
 use std::io::Write;
@@ -25,15 +26,6 @@ const SCRATCH_REGISTER2: Register = Register::R11;
 const FLOAT_SCRATCH1: Register = Register::XMM14;
 const FLOAT_SCRATCH2: Register = Register::XMM15;
 
-impl MoiraCompiler for X64CodeGenerator {
-    type InstructionType = Instruction;
-    fn generate_asm(&mut self, moira: &MoiraProgram<Instruction>, file: &Path) -> Result<()> {
-        let mut writer = BufWriter::new(std::fs::File::create(file)?);
-        self.gen_program(moira, &mut writer)?;
-        Ok(())
-    }
-}
-
 impl Default for X64CodeGenerator {
     fn default() -> Self {
         Self::new()
@@ -48,10 +40,14 @@ impl X64CodeGenerator {
             func_table: HashMap::new(),
         }
     }
-
+    pub fn generate_asm(&mut self, moira: &MoiraProgram, file: &Path) -> Result<()> {
+        let mut writer = BufWriter::new(std::fs::File::create(file)?);
+        self.gen_program(moira, &mut writer)?;
+        Ok(())
+    }
     fn gen_program(
         &mut self,
-        moira: &MoiraProgram<Instruction>,
+        moira: &MoiraProgram,
         writer: &mut BufWriter<std::fs::File>,
     ) -> Result<()> {
         // all the functions we define in this file
@@ -98,7 +94,7 @@ impl X64CodeGenerator {
     }
     fn gen_vars(
         &mut self,
-        moira: &MoiraProgram<Instruction>,
+        moira: &MoiraProgram,
         writer: &mut BufWriter<std::fs::File>,
     ) -> Result<()> {
         let mut extra_static_vars = Vec::new();
@@ -121,10 +117,10 @@ impl X64CodeGenerator {
                     }
                     StaticInit::InitNone => {
                         match var.stype {
-                            SymbolType::Int32 | crate::tacky::SymbolType::UInt32 => {
+                            SymbolType::Int32 | SymbolType::UInt32 => {
                                 writeln!(writer, "{} dd 0", var.name)?
                             }
-                            SymbolType::Int64 | crate::tacky::SymbolType::UInt64 => {
+                            SymbolType::Int64 | SymbolType::UInt64 => {
                                 writeln!(writer, "{} dq 0", var.name)?
                             }
                             SymbolType::Double => {
@@ -165,7 +161,7 @@ impl X64CodeGenerator {
     }
     fn gen_function(
         &mut self,
-        function: &Function<Instruction>,
+        function: &Function,
         writer: &mut BufWriter<std::fs::File>,
     ) -> Result<()> {
         let fixed_instructions = self.fixup_pass(function)?;
@@ -180,7 +176,7 @@ impl X64CodeGenerator {
     fn gen_prologue(
         &mut self,
         //    moira: &mut MoiraProgram<Instruction>,
-        function: &Function<Instruction>,
+        function: &Function,
         writer: &mut BufWriter<std::fs::File>,
     ) -> Result<()> {
         //println!("Generating prologue for function: {}", function.name);
@@ -474,7 +470,7 @@ impl X64CodeGenerator {
             _ => unreachable!(),
         }
     }
-    fn fixup_pass(&mut self, function: &Function<Instruction>) -> Result<Vec<Instruction>> {
+    fn fixup_pass(&mut self, function: &Function) -> Result<Vec<Instruction>> {
         self.next_offset = 0;
         self.pseudo_registers.clear();
         let mut new_instructions = Vec::new();

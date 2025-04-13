@@ -16,7 +16,7 @@ pub enum Token {
     LeftBrace,
     RightBrace,
     SemiColon,
-    Equals,
+    Assign,
     QuestionMark,
     Colon,
     Comma,
@@ -226,7 +226,7 @@ impl Lexer {
                     if self.match_next('=') {
                         Token::IsEqual
                     } else {
-                        Token::Equals
+                        Token::Assign
                     }
                 }
 
@@ -358,7 +358,6 @@ impl Lexer {
                 let mut unsigned = false;
                 let mut long = false;
                 loop {
-                    println!("peek: {:?}", self.peek());
                     match self.peek() {
                         'u' | 'U' => {
                             self.advance();

@@ -1,31 +1,31 @@
-use std::cmp::max;
+use std::{cmp::max, path::Path};
 
 use crate::{
-    codegen::MoiraGenerator,
-    moira::{MoiraProgram, StaticConstant, StaticVariable},
-    parser::Parser,
-    tacky::{SymbolType, TackyProgram},
-    x64::nasmgen::{self, X64CodeGenerator},
+    codegen::BackEnd, parser::Parser, symbols::SymbolType, tacky::TackyProgram,
+    x64::nasmgen::X64CodeGenerator,
 };
 use anyhow::Result;
 
-use super::moira_inst::{
-    AssemblyType, BinaryOperator, CondCode, Instruction, Operand, Register, UnaryOperator,
+use super::{
+    moira::{MoiraProgram, StaticConstant, StaticVariable},
+    moira_inst::{
+        AssemblyType, BinaryOperator, CondCode, Instruction, Operand, Register, UnaryOperator,
+    },
 };
-pub struct X64MoiraGenerator {
-    moira: MoiraProgram<Instruction>,
+pub struct X64BackEnd {
+    moira: MoiraProgram,
     instruction_counter: usize,
     const_0: String,
 }
 
 use crate::tacky;
-impl Default for X64MoiraGenerator {
+impl Default for X64BackEnd {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl X64MoiraGenerator {
+impl X64BackEnd {
     pub fn new() -> Self {
         let mut s = Self {
             moira: MoiraProgram::new(),
@@ -35,6 +35,24 @@ impl X64MoiraGenerator {
         s.const_0 = s.make_static_constant(0.0);
         s
     }
+
+    fn generate_moira(&mut self, program: &TackyProgram) -> Result<&MoiraProgram> {
+        for data in program.static_variables.values() {
+            self.moira.top_vars.push(StaticVariable {
+                name: data.name.clone(),
+                global: data.global,
+                value: data.init.clone(),
+                external: data.external,
+                stype: data.stype.clone(),
+            });
+        }
+        for function in &program.functions {
+            self.moira.gen_function(function)?;
+            self.gen_function(function)?;
+        }
+        Ok(&self.moira)
+    }
+
     fn moira(&mut self, inst: Instruction) {
         self.moira.add_instruction(inst);
     }
@@ -45,7 +63,8 @@ impl X64MoiraGenerator {
             SymbolType::UInt32 => AssemblyType::LongWord,
             SymbolType::UInt64 => AssemblyType::QuadWord,
             SymbolType::Double => AssemblyType::Double,
-            _ => unreachable!(),
+            SymbolType::Pointer(_) => AssemblyType::QuadWord,
+            SymbolType::Function(_, _) => AssemblyType::QuadWord, // TODO
         }
     }
 
@@ -495,6 +514,9 @@ impl X64MoiraGenerator {
                     self.moira(Instruction::Label(label2.clone()));
                 }
             }
+            tacky::Instruction::Load(ptr, dest) => todo!(),
+            tacky::Instruction::Store(src, ptr) => todo!(),
+            tacky::Instruction::GetAddress(src, dst) => todo!(),
         }
         Ok(())
     }
@@ -754,28 +776,11 @@ impl X64MoiraGenerator {
     }
 }
 
-impl MoiraGenerator for X64MoiraGenerator {
-    type InstructionType = Instruction;
-    fn generate_moira(&mut self, program: &TackyProgram) -> Result<&MoiraProgram<Instruction>> {
-        for data in program.static_variables.values() {
-            // let v = match data.init {
-            //     StaticInit => value,
-
-            //     None => 0,
-            //     _ => panic!("Invalid static variable value"),
-            // };
-            self.moira.top_vars.push(StaticVariable {
-                name: data.name.clone(),
-                global: data.global,
-                value: data.init.clone(),
-                external: data.external,
-                stype: data.stype.clone(),
-            });
-        }
-        for function in &program.functions {
-            self.moira.gen_function(function)?;
-            self.gen_function(function)?;
-        }
-        Ok(&self.moira)
+impl BackEnd for X64BackEnd {
+    fn compile(&mut self, tacky: &TackyProgram, output: &Path) -> Result<()> {
+        let moira = self.generate_moira(tacky)?;
+        let mut x64gen = X64CodeGenerator::new();
+        x64gen.generate_asm(&moira, output)?;
+        Ok(())
     }
 }
