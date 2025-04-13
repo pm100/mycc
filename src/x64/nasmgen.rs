@@ -120,8 +120,9 @@ impl X64CodeGenerator {
                             SymbolType::Int32 | SymbolType::UInt32 => {
                                 writeln!(writer, "{} dd 0", var.name)?
                             }
-                            SymbolType::Int64 | SymbolType::UInt64 => {
-                                writeln!(writer, "{} dq 0", var.name)?
+                            SymbolType::Int64 | SymbolType::UInt64 | SymbolType::Pointer(_) => {
+                                writeln!(writer, "align 8")?;
+                                writeln!(writer, "{} dq 0", var.name)?;
                             }
                             SymbolType::Double => {
                                 extra_static_vars.push(StaticConstant {
@@ -328,6 +329,11 @@ impl X64CodeGenerator {
                 let dest_str = self.get_operand(dest, assembly_type)?;
                 writeln!(writer, "        cvtsi2sd {}, {}", dest_str, src_str)?;
             }
+            Instruction::Lea(src, dest) => {
+                let src_str = self.get_operand(src, &AssemblyType::QuadWord)?;
+                let dest_str = self.get_operand(dest, &AssemblyType::QuadWord)?;
+                writeln!(writer, "        lea {}, {}", dest_str, src_str)?;
+            }
         }
         Ok(())
     }
@@ -387,6 +393,7 @@ impl X64CodeGenerator {
             Register::XMM7 => "xmm7".to_string(),
             Register::XMM14 => "xmm14".to_string(),
             Register::XMM15 => "xmm15".to_string(),
+            Register::RBP => "rbp".to_string(),
         }
     }
     fn get_operand(&mut self, value: &Operand, assembly_type: &AssemblyType) -> Result<String> {
@@ -399,7 +406,7 @@ impl X64CodeGenerator {
             Operand::Pseudo(_) => panic!("Pseudo register not supported"),
             Operand::Register(register) => Self::get_reg_name(register, assembly_type),
 
-            Operand::Stack(offset) => {
+            Operand::Memory(register, offset) => {
                 let qual = match assembly_type {
                     AssemblyType::LongWord => "DWORD",
                     AssemblyType::QuadWord => "QWORD",
@@ -408,7 +415,12 @@ impl X64CodeGenerator {
                     AssemblyType::Double => "",
                 };
 
-                format!("{} [rbp{:+}]", qual, offset)
+                format!(
+                    "{} [{}{:+}]",
+                    qual,
+                    Self::get_reg_name(register, &AssemblyType::QuadWord),
+                    offset
+                )
             }
             Operand::Data(data) => {
                 let qual = match assembly_type {
@@ -862,6 +874,22 @@ impl X64CodeGenerator {
                         ));
                     }
                 }
+
+                Instruction::Lea(src, dst) => {
+                    let new_src = self.fix_pseudo(src, &AssemblyType::QuadWord)?;
+                    let new_dest = self.fix_pseudo(dst, &AssemblyType::QuadWord)?;
+                    if Self::is_memory(&new_dest) {
+                        let scratch = Self::get_scratch_register1(&AssemblyType::QuadWord);
+                        new_instructions.push(Instruction::Lea(new_src, scratch.clone()));
+                        new_instructions.push(Instruction::Mov(
+                            AssemblyType::QuadWord,
+                            scratch,
+                            new_dest,
+                        ));
+                    } else {
+                        new_instructions.push(Instruction::Lea(new_src, new_dest));
+                    }
+                }
                 _ => {
                     new_instructions.push(instruction.clone());
                 }
@@ -873,7 +901,7 @@ impl X64CodeGenerator {
         Ok(new_instructions)
     }
     fn is_memory(operand: &Operand) -> bool {
-        matches!(operand, Operand::Stack(_)) || matches!(operand, Operand::Data(_))
+        matches!(operand, Operand::Memory(_, _)) || matches!(operand, Operand::Data(_))
     }
     fn is_constant(operand: &Operand) -> bool {
         matches!(operand, Operand::ImmediateI32(_))
@@ -917,7 +945,7 @@ impl X64CodeGenerator {
                     .insert(pseudo_name.to_string(), self.next_offset);
                 self.next_offset
             };
-            return Ok(Operand::Stack(-offset));
+            return Ok(Operand::Memory(Register::RBP, -offset));
         }
         Ok(operand.clone())
     }

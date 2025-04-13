@@ -663,7 +663,13 @@ impl Parser {
                     bail!("Static variable must be initialized to a constant");
                 }
                 if !is_auto {
-                    let converted = self.convert_by_assignment(&val, &symbol_type)?;
+                    let converted =
+                        if symbol_type.is_pointer() && Self::is_null_pointer_constant(&val) {
+                            Value::UInt32(0)
+                        } else {
+                            self.convert_by_assignment(&val, &symbol_type)?
+                        };
+                    //let converted = self.convert_by_assignment(&val, &symbol_type)?;
                     self.externs
                         .entry(rename.to_string())
                         .and_modify(|e| {
@@ -1158,7 +1164,7 @@ impl Parser {
         if token == Token::Eof {
             self.eof_hit = true;
         }
-        println!("next_token {:?}", token);
+        //   println!("next_token {:?}", token);
         Ok(token)
     }
     fn dump_var_map(&self) {
@@ -1194,7 +1200,7 @@ impl Parser {
     }
     pub(crate) fn peek(&mut self) -> Result<Token> {
         let token = self.peek_n(0);
-        println!("peek {:?}", token);
+        //  println!("peek {:?}", token);
         token
     }
     pub(crate) fn lookup_symbol(&self, name: &str) -> Option<(Symbol, bool)> {

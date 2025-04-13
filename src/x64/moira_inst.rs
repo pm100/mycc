@@ -20,6 +20,7 @@ pub enum Instruction {
     SignExtend(Operand, Operand),
     Cvttsdsi(AssemblyType, Operand, Operand),
     Cvtsi2sd(AssemblyType, Operand, Operand),
+    Lea(Operand, Operand),
 }
 #[derive(Debug, Clone)]
 pub enum UnaryOperator {
@@ -60,7 +61,7 @@ pub enum Operand {
     ImmediateU64(u64),
     ImmediateF64(f64),
     Pseudo(String),
-    Stack(i32),
+    Memory(Register, i32),
     Data(String),
 }
 #[derive(Debug, Clone)]
@@ -73,6 +74,7 @@ pub enum Register {
     R10,
     R11,
     CL,
+    RBP,
     XMM0,
     XMM1,
     XMM2,

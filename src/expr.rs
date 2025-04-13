@@ -52,6 +52,7 @@ impl Parser {
                         // if var.starts_with("$temp$") {
                         //     bail!("not lvalue");
                         // }
+
                         if !var.contains('$') {
                             let lookup = self.lookup_symbol(var);
                             if lookup.is_none() {
@@ -75,8 +76,8 @@ impl Parser {
                                         ));
                                     }
                                     ExpResult::PlainValue(_) => {
-                                        if var.starts_with("$temp$") {
-                                            bail!("not lvalue");
+                                        if !self.is_lvalue(&left) {
+                                            bail!("not lvalue {:?}", left);
                                         }
                                         self.instruction(Instruction::Copy(
                                             converted.clone(),
@@ -96,6 +97,11 @@ impl Parser {
                             }
 
                             _ => {
+                                if matches!(save_exp_result, ExpResult::PlainValue(_)) {
+                                    if !self.is_lvalue(&left) {
+                                        bail!("not lvalue {:?}", left);
+                                    }
+                                }
                                 let op = Self::convert_compound(&token)?;
                                 println!(
                                     "===>>op: {:?} left: {:?} {:?}",
@@ -104,28 +110,7 @@ impl Parser {
                                     left
                                 );
                                 self.check_binary_allowed(&op, &left_type, &right_type)?;
-                                // if Self::get_type(&left) == SymbolType::Double {
-                                //     if op == BinaryOperator::BitAnd
-                                //         || op == BinaryOperator::BitXor
-                                //         || op == BinaryOperator::BitOr
-                                //         || op == BinaryOperator::ShiftLeft
-                                //         || op == BinaryOperator::ShiftRight
-                                //         || op == BinaryOperator::Remainder
-                                //     {
-                                //         bail!("Cannot use this operator on double type");
-                                //     }
-                                // }
-                                // if Self::get_type(&right) == SymbolType::Double {
-                                //     if op == BinaryOperator::BitAnd
-                                //         || op == BinaryOperator::BitXor
-                                //         || op == BinaryOperator::BitOr
-                                //         || op == BinaryOperator::ShiftLeft
-                                //         || op == BinaryOperator::ShiftRight
-                                //         || op == BinaryOperator::Remainder
-                                //     {
-                                //         bail!("Cannot use this operator on double type");
-                                //     }
-                                // }
+
                                 let (left_conv, right_conv) = if token == Token::ShiftLeftEquals
                                     || token == Token::ShiftRightEquals
                                 {
@@ -287,7 +272,14 @@ impl Parser {
                         self.instruction(Instruction::Binary(op, left, right, dest.clone()));
                         dest
                     } else {
-                        let common_type = Self::get_common_type(&left_type, &right_type)?;
+                        let common_type =
+                            if matches!(op, BinaryOperator::Equal | BinaryOperator::NotEqual)
+                                && (left.is_pointer() || right.is_pointer())
+                            {
+                                Self::get_common_pointer_type(&left, &right)
+                            } else {
+                                Self::get_common_type(&left_type, &right_type)
+                            }?;
                         let left = self.convert_to(&left, &common_type, false)?;
                         let right = self.convert_to(&right, &common_type, false)?;
                         let dest_type = if op == BinaryOperator::Equal
@@ -332,7 +324,7 @@ impl Parser {
         }
     }
 
-    fn is_null_pointer_constant(value: &Value) -> bool {
+    pub fn is_null_pointer_constant(value: &Value) -> bool {
         match value {
             Value::Int32(0) => true,
             Value::Int64(0) => true,
@@ -432,17 +424,7 @@ impl Parser {
         if a == &SymbolType::Double || b == &SymbolType::Double {
             return Ok(SymbolType::Double);
         }
-        // if a.is_pointer() || b.is_pointer() {
-        //     match(a.is_pointer() && b.is_pointer() {
-        //         if a != b {
-        //             bail!("Cannot convert between different pointer types")
-        //         }
-        //         } else if a.is_pointer() {
-        //         return Ok(a.clone());
-        //     } else {
-        //         return Ok(b.clone());
-        //     }
-        // }
+
         let sizea = Self::get_size_of_stype(a);
         let sizeb = Self::get_size_of_stype(b);
         if sizea == sizeb {
@@ -461,6 +443,7 @@ impl Parser {
         target_type: &SymbolType,
         explicit_cast: bool,
     ) -> Result<Value> {
+        println!("convert {:?} to {:?}", value, target_type);
         let vtype = Self::get_type(value);
         let return_value = if vtype == *target_type {
             // easy case
@@ -493,27 +476,15 @@ impl Parser {
                 (
                     Value::UInt64(0) | Value::Int64(0) | Value::Int32(0) | Value::UInt32(0),
                     SymbolType::Pointer(_),
-                ) => Value::UInt64(0),
-
-                //     // NULL pointer
-                //     if matches!(
-                //         value,
-                //         Value::Int32(0) | Value::Int64(0) | Value::UInt32(0) | Value::UInt64(0)
-                //     ) {
-                //         Value::UInt64(0)
-                //     } else {
-                //         // pointer to pointer conversion
-                //         if let Value::Variable(v, SymbolType::Pointer(_)) = value {
-                //             Value::Variable(v.clone(), target_type.clone())
-                //         } else {
-                //             bail!("Illegal convert {:?} to {:?}", value, target_type);
-                //         }
-                //     }
-                // }
+                ) => {
+                    let dest_name = self.make_temporary();
+                    let dest = Value::Variable(dest_name.clone(), target_type.clone());
+                    self.instruction(Instruction::Copy(Value::Int64(0), dest.clone()));
+                    return Ok(dest.clone());
+                }
 
                 // variables
                 _ => {
-                    println!("convert {:?} to {:?}", value, target_type);
                     let dest_name = self.make_temporary();
                     let dest = Value::Variable(dest_name.clone(), target_type.clone());
                     match (&vtype, target_type) {
@@ -521,6 +492,7 @@ impl Parser {
                             if !explicit_cast {
                                 bail!("Cannot implicitly convert pointer t1 to pointer t2");
                             }
+                            return Ok(value.clone());
                         }
                         (SymbolType::Pointer(_), _) => {
                             if !explicit_cast {
@@ -529,6 +501,18 @@ impl Parser {
                             if !Self::is_integer(target_type) {
                                 bail!("Cannot convert pointer to non-integer type");
                             }
+                            let tsize = Self::get_size_of_stype(target_type);
+                            match tsize {
+                                8 => {
+                                    self.instruction(Instruction::Copy(value.clone(), dest.clone()))
+                                }
+                                4 => self.instruction(Instruction::Truncate(
+                                    value.clone(),
+                                    dest.clone(),
+                                )),
+                                _ => bail!("Cannot convert pointer to non-integer type"),
+                            }
+                            return Ok(dest.clone());
                         }
                         (_, SymbolType::Pointer(_)) => {
                             if !explicit_cast {
@@ -537,15 +521,20 @@ impl Parser {
                             if !Self::is_integer(&vtype) {
                                 bail!("Cannot convert non-integer to pointer type");
                             }
+                            let vsize = Self::get_size_of_stype(&vtype);
+                            match vsize {
+                                8 => {
+                                    self.instruction(Instruction::Copy(value.clone(), dest.clone()))
+                                }
+                                4 => self.instruction(Instruction::ZeroExtend(
+                                    value.clone(),
+                                    dest.clone(),
+                                )),
+                                _ => bail!("Cannot convert pointer to non-integer type"),
+                            }
+
+                            return Ok(dest.clone());
                         }
-                        // (SymbolType::Pointer(_), SymbolType::Pointer(_)) => {
-                        //     // let common_type = Self::get_common_pointer_type(value, target_type)?;
-                        //     // let dest_name = self.make_temporary();
-                        //     // let dest = Value::Variable(dest_name.clone(), common_type.clone());
-                        //     // self.instruction(Instruction::Copy(value.clone(), dest.clone()));
-                        //     // dest.clone()
-                        //     todo!("Pointer conversion")
-                        // }
                         (SymbolType::Double, _) => {
                             if Self::is_signed(target_type) {
                                 self.instruction(Instruction::DoubleToInt(
@@ -596,47 +585,6 @@ impl Parser {
                             }
                         }
                     };
-                    // if vtype.is_pointer() && !explicit_cast {
-                    //     //  bail!("Cannot convert pointer to non-pointer type");
-                    // }
-                    // let dest_name = self.make_temporary();
-                    // let dest = Value::Variable(dest_name.clone(), target_type.clone());
-
-                    // let vsize = Self::get_size_of_stype(&vtype);
-                    // if vtype == SymbolType::Double {
-                    //     if Self::is_signed(target_type) {
-                    //         self.instruction(Instruction::DoubleToInt(value.clone(), dest.clone()));
-                    //     } else {
-                    //         self.instruction(Instruction::DoubleToUInt(
-                    //             value.clone(),
-                    //             dest.clone(),
-                    //         ));
-                    //     }
-                    // } else if target_type == &SymbolType::Double {
-                    //     if vtype.is_pointer() {
-                    //         bail!("Cannot convert pointer to double");
-                    //     }
-                    //     if Self::is_signed(&vtype) {
-                    //         self.instruction(Instruction::IntToDouble(value.clone(), dest.clone()));
-                    //     } else {
-                    //         self.instruction(Instruction::UIntToDouble(
-                    //             value.clone(),
-                    //             dest.clone(),
-                    //         ));
-                    //     }
-                    // } else {
-                    //     let tsize = Self::get_size_of_stype(target_type);
-                    //     if tsize == vsize {
-                    //         // same size, just copy
-                    //         self.instruction(Instruction::Copy(value.clone(), dest.clone()));
-                    //     } else if tsize < vsize {
-                    //         self.instruction(Instruction::Truncate(value.clone(), dest.clone()));
-                    //     } else if Self::is_signed(&vtype) {
-                    //         self.instruction(Instruction::SignExtend(value.clone(), dest.clone()));
-                    //     } else {
-                    //         self.instruction(Instruction::ZeroExtend(value.clone(), dest.clone()));
-                    //     }
-                    // }
                     dest.clone()
                 }
             }
@@ -737,7 +685,7 @@ impl Parser {
 
                 if specifiers.specified_type.is_some() {
                     //cast
-                    // self.expect(Token::RightParen)?;
+
                     let target_type = specifiers.specified_type.unwrap();
                     let (abs, _) = self.parse_abstract_declarator(&target_type)?;
                     let right = self.do_factor_and_convert()?;

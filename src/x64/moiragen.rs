@@ -110,7 +110,10 @@ impl X64BackEnd {
                 let assembly_type = Self::get_assembly_type(stype);
                 self.moira(Instruction::Mov(
                     assembly_type.clone(),
-                    Operand::Stack(((function.parameters.len() - idx + 5) * 8) as i32),
+                    Operand::Memory(
+                        Register::RBP,
+                        ((function.parameters.len() - idx + 5) * 8) as i32,
+                    ),
                     Operand::Pseudo(param.clone()),
                 ));
             }
@@ -514,9 +517,40 @@ impl X64BackEnd {
                     self.moira(Instruction::Label(label2.clone()));
                 }
             }
-            tacky::Instruction::Load(ptr, dest) => todo!(),
-            tacky::Instruction::Store(src, ptr) => todo!(),
-            tacky::Instruction::GetAddress(src, dst) => todo!(),
+            tacky::Instruction::Load(ptr, dest) => {
+                let (src, _src_stype, _) = self.get_value(ptr);
+                let (dest, _dest_stype, dest_assembly_type) = self.get_value(dest);
+                self.moira(Instruction::Mov(
+                    AssemblyType::QuadWord,
+                    src,
+                    Operand::Register(Register::RAX),
+                ));
+                self.moira(Instruction::Mov(
+                    dest_assembly_type,
+                    Operand::Memory(Register::RAX, 0),
+                    dest.clone(),
+                ));
+            }
+            tacky::Instruction::Store(src, ptr) => {
+                let (src, _src_stype, src_assembly_type) = self.get_value(src);
+                let (ptr, _ptr_stype, _) = self.get_value(ptr);
+                self.moira(Instruction::Mov(
+                    AssemblyType::QuadWord,
+                    ptr,
+                    Operand::Register(Register::RAX),
+                ));
+                self.moira(Instruction::Mov(
+                    src_assembly_type,
+                    src,
+                    Operand::Memory(Register::RAX, 0),
+                ));
+            }
+            tacky::Instruction::GetAddress(src, dest) => {
+                let (src, _src_stype, _) = self.get_value(src);
+                let (dest, _dest_stype, _) = self.get_value(dest);
+
+                self.moira(Instruction::Lea(src, dest));
+            }
         }
         Ok(())
     }
@@ -779,6 +813,7 @@ impl X64BackEnd {
 impl BackEnd for X64BackEnd {
     fn compile(&mut self, tacky: &TackyProgram, output: &Path) -> Result<()> {
         let moira = self.generate_moira(tacky)?;
+        moira.dump();
         let mut x64gen = X64CodeGenerator::new();
         x64gen.generate_asm(&moira, output)?;
         Ok(())
