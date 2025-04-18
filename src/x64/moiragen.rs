@@ -447,7 +447,7 @@ impl X64BackEnd {
             }
             tacky::Instruction::UIntToDouble(src, dest) => {
                 let (src, src_stype, _) = self.get_value(src);
-                let (dest, dest_stype, _) = self.get_value(dest);
+                let (dest, _dest_stype, _) = self.get_value(dest);
                 if src_stype == SymbolType::UInt32 {
                     let scratch = X64CodeGenerator::get_scratch_register1(&AssemblyType::QuadWord);
                     self.moira(Instruction::Mov(
@@ -805,6 +805,9 @@ impl X64BackEnd {
                         assembly_type,
                     )
                 }
+            }
+            _ => {
+                panic!("Invalid value type {:?}", value);
             }
         }
     }

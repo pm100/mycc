@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use anyhow::{bail, Result};
 use enum_as_inner::EnumAsInner;
 
@@ -52,7 +54,7 @@ pub enum SymbolLinkage {
     None, //loalc stack var
 }
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct Symbol {
+pub struct Symbol {
     pub name: String,
     pub state: SymbolState,
     pub rename: String,
@@ -75,5 +77,63 @@ impl Parser {
             SymbolType::Pointer(t) => Ok(*t.clone()),
             _ => bail!("Not a pointer type"),
         }
+    }
+    pub(crate) fn lookup_symbol(&self, name: &str) -> Option<(Symbol, bool)> {
+        for i in (0..self.symbol_stack.len()).rev() {
+            if let Some(sym) = self.symbol_stack[i].get(name) {
+                return Some((sym.clone(), i == self.symbol_stack.len() - 1));
+            }
+        }
+        None
+    }
+    pub(crate) fn get_global_symbol(&mut self, name: &str) -> Symbol {
+        self.symbol_stack[0].get(name).unwrap().clone()
+    }
+    pub(crate) fn lookup_global_symbol(&self, name: &str) -> Option<(Symbol, bool)> {
+        if let Some(sym) = self.symbol_stack[0].get(name) {
+            return Some((sym.clone(), self.symbol_stack.len() == 1));
+        }
+        None
+    }
+    pub fn insert_global_symbol(&mut self, name: &str, symbol: Symbol) {
+        println!("insert_global_symbol {:?}", symbol);
+        //   debug_assert!(!self.symbol_stack[0].contains_key(name));
+        self.symbol_stack
+            .get_mut(0)
+            .unwrap()
+            .insert(name.to_string(), symbol);
+    }
+    pub fn insert_symbol(&mut self, name: &str, symbol: Symbol) {
+        println!("insert_symbol {:?}", symbol);
+        self.symbol_stack
+            .last_mut()
+            .unwrap()
+            .insert(name.to_string(), symbol);
+    }
+
+    pub fn pop_symbols(&mut self) {
+        //  self.dump_symbols();
+        println!("pop_symbols {:?}", self.symbol_stack.len());
+        self.symbol_stack.pop();
+    }
+    pub fn push_symbols(&mut self) {
+        println!("push_symbols {:?}", self.symbol_stack.len());
+        self.symbol_stack.push(HashMap::new());
+    }
+    pub fn dump_symbols(&self) {
+        println!("=======symbol table dump=======");
+        for (i, sym) in self.symbol_stack.iter().enumerate() {
+            let pad = format!("{empty:>width$}", empty = "", width = i * 4);
+            if sym.is_empty() {
+                println!("{} empty", pad);
+            }
+            for (_, sym) in sym.iter() {
+                println!("{} {:?}", pad, sym);
+            }
+        }
+        for (sym, top) in self.externs.iter() {
+            println!("extern {} {:?}", sym, top);
+        }
+        println!("=======end symbol table dump=======");
     }
 }

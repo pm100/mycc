@@ -5,36 +5,37 @@ use crate::{
     tacky::{BinaryOperator, Instruction, UnaryOperator, Value}, //  x64::moira_inst::BinaryOperator,
 };
 use anyhow::{bail, Result};
-use backtrace::Symbol;
-use enum_as_inner::EnumAsInner;
-#[derive(Debug, PartialEq, Clone, EnumAsInner)]
-pub enum ExpResult {
-    PlainValue(Value),
-    DereferencedPointer(Value, SymbolType),
-}
+//use backtrace::Symbol;
+
 impl Parser {
-    pub(crate) fn do_expression(&mut self, min_prec: i32) -> Result<ExpResult> {
+    pub(crate) fn do_rvalue_expression(&mut self) -> Result<Value> {
+        let expr = self.do_expression(0)?;
+        println!("do_rvalue_expression {:?}", expr);
+        self.make_rvalue(&expr)
+    }
+    fn do_expression(&mut self, min_prec: i32) -> Result<Value> {
         let mut token = self.peek()?;
 
-        let save_exp_result = self.do_factor()?;
-        let mut left = self.and_convert(save_exp_result.clone())?;
-        let left_type = Self::get_type(&left);
+        let mut left = self.do_unary()?;
+
         println!(
-            "{}expleft: {:?} {:?} {}",
-            self.nest,
+            "expleft: {:?} {:?} {}",
+            //self.nest,
             left,
             token,
             Self::precedence(&token)
         );
-        self.nest.push(' ');
-        self.nest.push(' ');
 
         loop {
-            println!("loop {:?} {:?} {:?}", token, save_exp_result, left);
+            println!("loop {:?} {:?} ", token, left);
             token = self.peek()?;
             if Self::precedence(&token) < min_prec {
                 break;
             }
+
+            // these are all assignments of some kind
+            // we need to check for lvalue here
+            // plus make derefenced pointer into lvalue
             let dest = match token {
                 Token::Assign
                 | Token::AndEquals
@@ -48,151 +49,57 @@ impl Parser {
                 | Token::ShiftRightEquals
                 | Token::RemainderEquals => {
                     self.next_token()?;
-                    if let Value::Variable(ref var, _) = left {
-                        // if var.starts_with("$temp$") {
-                        //     bail!("not lvalue");
-                        // }
 
-                        if !var.contains('$') {
-                            let lookup = self.lookup_symbol(var);
-                            if lookup.is_none() {
-                                bail!("Variable {} not declared", var);
-                            }
+                    let left_type = Self::get_type(&left);
+
+                    let right = self.do_expression(Self::precedence(&token))?;
+                    let right = self.make_rvalue(&right)?;
+                    let right_type = Self::get_type(&right);
+                    println!(
+                        "left: {:?} {:?} right: {:?}  {:?}",
+                        left, left_type, right, right_type
+                    );
+
+                    match token {
+                        // simple assignment
+                        Token::Assign => {
+                            let result = self.store_into_lvalue(&right, &left)?;
+
+                            // ensure we do not return an lvalue
+
+                            let result_type = Self::get_type(&result);
+                            let not_lvalue = self.make_temporary(&result_type);
+                            self.instruction(Instruction::Copy(result, not_lvalue.clone()));
+
+                            not_lvalue
                         }
 
-                        let right = self.do_expression_and_convert(Self::precedence(&token))?;
-                        let right_type = Self::get_type(&right);
-
-                        match token {
-                            Token::Assign => {
-                                //let converted = self.convert_to(&right, &left_type.clone());
-                                let converted =
-                                    self.convert_by_assignment(&right, &left_type.clone())?;
-                                match save_exp_result {
-                                    ExpResult::DereferencedPointer(ref ptr, ref stype) => {
-                                        self.instruction(Instruction::Store(
-                                            right.clone(),
-                                            ptr.clone(),
-                                        ));
-                                    }
-                                    ExpResult::PlainValue(_) => {
-                                        if !self.is_lvalue(&left) {
-                                            bail!("not lvalue {:?}", left);
-                                        }
-                                        self.instruction(Instruction::Copy(
-                                            converted.clone(),
-                                            left.clone(),
-                                        ));
-                                    }
-                                }
-
-                                // ensure we do not return an lvalue
-                                let not_lvalue =
-                                    Value::Variable(self.make_temporary(), left_type.clone());
-                                self.instruction(Instruction::Copy(
-                                    converted.clone(),
-                                    not_lvalue.clone(),
-                                ));
-                                not_lvalue
-                            }
-
-                            _ => {
-                                if matches!(save_exp_result, ExpResult::PlainValue(_)) {
-                                    if !self.is_lvalue(&left) {
-                                        bail!("not lvalue {:?}", left);
-                                    }
-                                }
-                                let op = Self::convert_compound(&token)?;
-                                println!(
-                                    "===>>op: {:?} left: {:?} {:?}",
-                                    op,
-                                    left.is_double(),
-                                    left
-                                );
-                                self.check_binary_allowed(&op, &left_type, &right_type)?;
-
-                                let (left_conv, right_conv) = if token == Token::ShiftLeftEquals
-                                    || token == Token::ShiftRightEquals
-                                {
-                                    (left.clone(), right.clone())
-                                } else {
-                                    let common_type =
-                                        Self::get_common_type(&left_type.clone(), &right_type)?;
-                                    let left_conv = self.convert_to(&left, &common_type, false)?;
-                                    let right_conv =
-                                        self.convert_to(&right, &common_type, false)?;
-                                    (left_conv, right_conv)
-                                };
-
-                                self.instruction(Instruction::Binary(
-                                    op,
-                                    left_conv.clone(),
-                                    right_conv.clone(),
-                                    left_conv.clone(),
-                                ));
-                                // HACK
-                                // we need to make sure the the result is *not* an lvalue
-                                let dest =
-                                    Value::Variable(self.make_temporary(), left_type.clone());
-                                let left_final = self.convert_to(&left_conv, &left_type, false)?;
-                                self.instruction(Instruction::Copy(
-                                    left_final.clone(),
-                                    left.clone(),
-                                ));
-                                self.instruction(Instruction::Copy(
-                                    left_final.clone(),
-                                    dest.clone(),
-                                ));
-                                dest
-                            }
+                        _ => {
+                            let op = Self::convert_compound(&token)?;
+                            self.process_compound(&left, &right, &op)?
                         }
-                    } else {
-                        bail!("Expected variable, got {:?}", left);
                     }
                 }
-                Token::PlusPlus => {
-                    self.next_token()?;
-                    if !self.is_lvalue(&left) {
-                        bail!("not lvaluea");
-                    }
-                    let dest_name = self.make_temporary();
-                    let ret_dest = Value::Variable(dest_name.clone(), left_type.clone());
-                    self.instruction(Instruction::Copy(left.clone(), ret_dest.clone()));
-                    self.instruction(Instruction::Binary(
-                        BinaryOperator::Add,
-                        left.clone(),
-                        Value::Int32(1),
-                        left.clone(),
-                    ));
+                // Token::PlusPlus | Token::MinusMinus => {
+                //     assert!(false);
+                //     let op = if token == Token::PlusPlus {
+                //         BinaryOperator::Add
+                //     } else {
+                //         BinaryOperator::Subtract
+                //     };
 
-                    ret_dest
-                }
-                Token::MinusMinus => {
-                    self.next_token()?;
-                    if !self.is_lvalue(&left) {
-                        bail!("not lvalueb {:?}", left);
-                    }
-                    let dest_name = self.make_temporary();
-                    let ret_dest = Value::Variable(dest_name.clone(), left_type.clone());
-                    self.instruction(Instruction::Copy(left.clone(), ret_dest.clone()));
-                    self.instruction(Instruction::Binary(
-                        BinaryOperator::Subtract,
-                        left.clone(),
-                        Value::Int32(1),
-                        left.clone(),
-                    ));
-
-                    ret_dest
-                }
+                //     self.process_compound(&left, &Value::Int32(1), &op)?
+                // }
                 Token::LogicalAnd => {
                     self.next_token()?;
                     let label_false = self.make_label("and_false");
                     let label_end = self.make_label("and_end");
                     self.instruction(Instruction::JumpIfZero(left, label_false.clone()));
-                    let right = self.do_expression_and_convert(Self::precedence(&token) + 1)?;
+                    let right = self.do_expression(Self::precedence(&token) + 1)?;
+                    let right = self.make_rvalue(&right)?;
                     self.instruction(Instruction::JumpIfZero(right, label_false.clone()));
 
-                    let dest = Value::Variable(self.make_temporary(), SymbolType::Int32);
+                    let dest = self.make_temporary(&SymbolType::Int32);
                     self.instruction(Instruction::Copy(Value::Int32(1), dest.clone()));
                     self.instruction(Instruction::Jump(label_end.clone()));
                     self.instruction(Instruction::Label(label_false.clone()));
@@ -205,10 +112,11 @@ impl Parser {
                     let label_true = self.make_label("or_true");
                     let label_end = self.make_label("or_end");
                     self.instruction(Instruction::JumpIfNotZero(left, label_true.clone()));
-                    let right = self.do_expression_and_convert(Self::precedence(&token) + 1)?;
+                    let right = self.do_expression(Self::precedence(&token) + 1)?;
+                    let right = self.make_rvalue(&right)?;
                     self.instruction(Instruction::JumpIfNotZero(right, label_true.clone()));
 
-                    let dest = Value::Variable(self.make_temporary(), SymbolType::Int32);
+                    let dest = self.make_temporary(&SymbolType::Int32);
                     self.instruction(Instruction::Copy(Value::Int32(0), dest.clone()));
                     self.instruction(Instruction::Jump(label_end.clone()));
                     self.instruction(Instruction::Label(label_true.clone()));
@@ -225,17 +133,17 @@ impl Parser {
                     self.instruction(Instruction::JumpIfZero(condition, false_label.clone()));
 
                     //true
-                    let true_exp = self.do_expression_and_convert(0)?;
-                    let mut result =
-                        Value::Variable(self.make_temporary(), Self::get_type(&true_exp));
+                    let true_exp = self.do_expression(0)?;
+                    let true_exp = self.make_rvalue(&true_exp)?;
+                    let mut result = self.make_temporary(&Self::get_type(&true_exp));
                     self.instruction(Instruction::Copy(true_exp.clone(), result.clone()));
                     self.instruction(Instruction::Jump(maybe_true_label.clone()));
 
                     // false
                     self.instruction(Instruction::Label(false_label.clone()));
                     self.expect(Token::Colon)?;
-                    let false_exp = self.do_expression_and_convert(Self::precedence(&token))?;
-                    //  let result = Value::Variable(self.make_temporary(), Self::get_type(&true_exp));
+                    let false_exp = self.do_expression(Self::precedence(&token))?;
+                    let false_exp = self.make_rvalue(&false_exp)?;
                     if Self::get_type(&false_exp) != Self::get_type(&true_exp) {
                         let common_type = Self::get_common_type(
                             &Self::get_type(&true_exp),
@@ -246,14 +154,13 @@ impl Parser {
                             false_exp, true_exp, common_type
                         );
                         let false_converted = self.convert_to(&false_exp, &common_type, false)?;
-                        result = Value::Variable(self.make_temporary(), common_type.clone());
+                        result = self.make_temporary(&common_type);
                         self.instruction(Instruction::Copy(false_converted, result.clone()));
                         self.instruction(Instruction::Jump(exit_label.clone()));
                         self.instruction(Instruction::Label(maybe_true_label.clone()));
                         let true_converted = self.convert_to(&true_exp, &common_type, false)?;
 
                         self.instruction(Instruction::Copy(true_converted, result.clone()));
-                        // self.instruction(Instruction::Jump(exit_label.clone()));
                     } else {
                         self.instruction(Instruction::Copy(false_exp, result.clone()));
                         self.instruction(Instruction::Label(maybe_true_label.clone()));
@@ -263,12 +170,15 @@ impl Parser {
                 }
                 _ => {
                     let op = self.convert_binop()?;
+                    left = self.make_rvalue(&left)?;
+                    let left_type = Self::get_type(&left);
 
-                    let right = self.do_expression_and_convert(Self::precedence(&token) + 1)?;
+                    let right = self.do_expression(Self::precedence(&token) + 1)?;
+                    let right = self.make_rvalue(&right)?;
                     let right_type = Self::get_type(&right);
                     self.check_binary_allowed(&op, &left_type, &right_type)?;
                     if op == BinaryOperator::ShiftLeft || op == BinaryOperator::ShiftRight {
-                        let dest = Value::Variable(self.make_temporary(), left_type.clone());
+                        let dest = self.make_temporary(&left_type.clone());
                         self.instruction(Instruction::Binary(op, left, right, dest.clone()));
                         dest
                     } else {
@@ -293,7 +203,7 @@ impl Parser {
                         } else {
                             common_type.clone()
                         };
-                        let dest = Value::Variable(self.make_temporary(), dest_type);
+                        let dest = self.make_temporary(&dest_type);
                         let inst = Instruction::Binary(op, left, right, dest.clone());
                         self.instruction(inst);
                         dest
@@ -302,37 +212,56 @@ impl Parser {
             };
             left = dest;
         }
-        self.nest.pop();
-        self.nest.pop();
-        Ok(ExpResult::PlainValue(left))
-    }
-    fn is_arithmetic(stype: &SymbolType) -> bool {
-        match stype {
-            SymbolType::Int32
-            | SymbolType::Int64
-            | SymbolType::UInt32
-            | SymbolType::UInt64
-            | SymbolType::Double => true,
-            _ => false,
-        }
+        Ok(left)
     }
 
-    fn is_integer(stype: &SymbolType) -> bool {
-        match stype {
-            SymbolType::Int32 | SymbolType::Int64 | SymbolType::UInt32 | SymbolType::UInt64 => true,
-            _ => false,
-        }
+    // x op= y
+    fn process_compound(
+        &mut self,
+        left: &Value,
+        right: &Value,
+        op: &BinaryOperator,
+    ) -> Result<Value> {
+        // we have var op= value
+        // a 2 step approach
+        // evaluate (var op value) -> binval
+        // store binval into var
+
+        let left_binval = self.make_rvalue(&left)?;
+        let left_type = Self::get_type(&left_binval);
+        let right_type = Self::get_type(&right);
+        println!("===>>op: {:?} left: {:?} {:?}", op, left.is_double(), left);
+        self.check_binary_allowed(&op, &left_type, &right_type)?;
+
+        let (left_conv, right_conv) =
+            if *op == BinaryOperator::ShiftLeft || *op == BinaryOperator::ShiftRight {
+                (left.clone(), right.clone())
+            } else {
+                let common_type = Self::get_common_type(&left_type.clone(), &right_type)?;
+                let left_conv = self.convert_to(&left_binval, &common_type, false)?;
+                let right_conv = self.convert_to(&right, &common_type, false)?;
+                (left_conv, right_conv)
+            };
+        let left_conv_type = Self::get_type(&left_conv);
+        let binval = self.make_temporary(&left_conv_type);
+
+        self.instruction(Instruction::Binary(
+            op.clone(),
+            left_conv.clone(),
+            right_conv.clone(),
+            binval.clone(),
+        ));
+
+        let result = self.store_into_lvalue(&binval, &left)?;
+
+        // we need to make sure the the result is *not* an lvalue
+
+        let result_type = Self::get_type(&result);
+        let not_lvalue = self.make_temporary(&result_type);
+        self.instruction(Instruction::Copy(result, not_lvalue.clone()));
+        Ok(not_lvalue.clone())
     }
 
-    pub fn is_null_pointer_constant(value: &Value) -> bool {
-        match value {
-            Value::Int32(0) => true,
-            Value::Int64(0) => true,
-            Value::UInt32(0) => true,
-            Value::UInt64(0) => true,
-            _ => false,
-        }
-    }
     pub fn convert_by_assignment(
         &mut self,
         value: &Value,
@@ -353,25 +282,6 @@ impl Parser {
         bail!("Cannot convert {:?} to {:?}", value, target_type);
     }
 
-    fn do_expression_and_convert(&mut self, precedence: i32) -> Result<Value> {
-        let res = self.do_expression(precedence)?;
-        self.and_convert(res)
-    }
-
-    fn and_convert(&mut self, exp_result: ExpResult) -> Result<Value> {
-        match exp_result {
-            ExpResult::PlainValue(v) => Ok(v.clone()),
-            ExpResult::DereferencedPointer(ptr, stype) => {
-                let dest = Value::Variable(self.make_temporary(), stype);
-                self.instruction(Instruction::Load(ptr.clone(), dest.clone()));
-                Ok(dest)
-            }
-        }
-    }
-    fn do_factor_and_convert(&mut self) -> Result<Value> {
-        let res = self.do_factor()?;
-        self.and_convert(res)
-    }
     pub fn get_type(value: &Value) -> SymbolType {
         match value {
             Value::Int32(_) => SymbolType::Int32,
@@ -380,6 +290,7 @@ impl Parser {
             Value::UInt64(_) => SymbolType::UInt64,
             Value::Double(_) => SymbolType::Double,
             Value::Variable(_, t) => t.clone(),
+            Value::Dereference(v) => Self::get_type(v),
         }
     }
     pub fn is_signed(symbol: &SymbolType) -> bool {
@@ -477,16 +388,14 @@ impl Parser {
                     Value::UInt64(0) | Value::Int64(0) | Value::Int32(0) | Value::UInt32(0),
                     SymbolType::Pointer(_),
                 ) => {
-                    let dest_name = self.make_temporary();
-                    let dest = Value::Variable(dest_name.clone(), target_type.clone());
+                    let dest = self.make_temporary(&target_type);
                     self.instruction(Instruction::Copy(Value::Int64(0), dest.clone()));
                     return Ok(dest.clone());
                 }
 
                 // variables
                 _ => {
-                    let dest_name = self.make_temporary();
-                    let dest = Value::Variable(dest_name.clone(), target_type.clone());
+                    let dest = self.make_temporary(&target_type);
                     match (&vtype, target_type) {
                         (SymbolType::Pointer(_), SymbolType::Pointer(_)) => {
                             if !explicit_cast {
@@ -591,153 +500,287 @@ impl Parser {
         };
         Ok(return_value)
     }
-    fn do_factor(&mut self) -> Result<ExpResult> {
-        let token = self.next_token()?;
-        println!("{}factor {:?}", self.nest, token);
-        match token {
-            Token::Constant(val) => {
-                println!("val: {}", val);
-                Ok(ExpResult::PlainValue(Value::Int32(val)))
+
+    // this is used for assignments and ++/-- operators
+
+    fn store_into_lvalue(&mut self, value: &Value, dest: &Value) -> Result<Value> {
+        println!("store_into_lvalue {:?} => {:?}", value, dest);
+        match dest {
+            Value::Dereference(v) => {
+                let ptype = Self::get_type(&v);
+                let stype = Self::get_pointee_type(&ptype)?;
+                let converted = self.convert_by_assignment(value, &stype.clone())?;
+                self.instruction(Instruction::Store(converted.clone(), *v.clone()));
+                Ok(converted.clone())
             }
-            Token::LongConstant(val) => {
-                println!("val: {}", val);
-                Ok(ExpResult::PlainValue(Value::Int64(val)))
-            }
-            Token::UConstant(val) => {
-                println!("val: {}", val);
-                Ok(ExpResult::PlainValue(Value::UInt32(val)))
-            }
-            Token::ULongConstant(val) => {
-                println!("val: {}", val);
-                Ok(ExpResult::PlainValue(Value::UInt64(val)))
-            }
-            Token::F64Constant(val) => {
-                println!("val: {}", val);
-                Ok(ExpResult::PlainValue(Value::Double(val)))
-            }
-            // prefix ++ and --
-            Token::PlusPlus => {
-                let source = self.do_factor_and_convert()?;
-                if !self.is_lvalue(&source) {
-                    bail!("not lvalue");
+            Value::Variable(name, _stype) => {
+                if !name.contains('$') {
+                    let lookup = self.lookup_symbol(name);
+                    if lookup.is_none() {
+                        bail!("Variable {} not declared", name);
+                    }
+                } else {
+                    if !self.is_lvalue(dest) {
+                        bail!("Not lvalue {:?}", dest);
+                    }
                 }
-                let dest_name = self.make_temporary();
-                let ret_dest = Value::Variable(dest_name.clone(), Self::get_type(&source));
-                self.instruction(Instruction::Binary(
-                    BinaryOperator::Add,
-                    Value::Int32(1),
-                    source.clone(),
-                    ret_dest.clone(),
-                ));
-                self.instruction(Instruction::Copy(ret_dest.clone(), source));
-                Ok(ExpResult::PlainValue(ret_dest))
+                let stype = Self::get_type(dest);
+                let converted = self.convert_by_assignment(value, &stype.clone())?;
+                self.instruction(Instruction::Copy(converted.clone(), dest.clone()));
+                Ok(converted.clone())
             }
-            Token::MinusMinus => {
-                let source = self.do_factor_and_convert()?;
-                if !self.is_lvalue(&source) {
-                    bail!("not lvalue");
-                }
-                let dest_name = self.make_temporary();
-                let ret_dest = Value::Variable(dest_name.clone(), Self::get_type(&source));
+            _ => bail!("Expected lvalue, got {:?}", value),
+        }
+    }
+
+    fn make_rvalue(&mut self, value: &Value) -> Result<Value> {
+        println!("make_rvalue {:?}", value);
+        match value {
+            Value::Dereference(v) => {
+                let ptype = Self::get_type(&v);
+                let stype = Self::get_pointee_type(&ptype)?;
+                let dest = self.make_temporary(&stype);
+                self.instruction(Instruction::Load(*v.clone(), dest.clone()));
+                println!("dereference {:?}", dest);
+                Ok(dest)
+            }
+
+            _ => Ok(value.clone()),
+        }
+    }
+
+    fn do_unary(&mut self) -> Result<Value> {
+        /*
+           <unary-exp> ::= <unop> <unary-exp>
+                           | "(" { <type-specifier> }+ [ <abstract-declarator> ] ")" <unary-exp>
+                           | <postfix-exp>
+        */
+        let token = self.peek()?;
+        println!("do_unary {:?}", token);
+        let ret_val = match token {
+            //
+            // Unary ops first
+            //
+            Token::PlusPlus | Token::MinusMinus => {
+                self.next_token()?;
+                let source = self.do_unary()?;
+
+                let op = if token == Token::PlusPlus {
+                    BinaryOperator::Add
+                } else {
+                    BinaryOperator::Subtract
+                };
+
+                let source_rv = self.make_rvalue(&source)?;
+                let inc_val = match Self::get_type(&source_rv) {
+                    SymbolType::Int32 => Value::Int32(1),
+                    SymbolType::UInt32 => Value::UInt32(1),
+                    SymbolType::Int64 => Value::Int64(1),
+                    SymbolType::UInt64 => Value::UInt64(1),
+                    SymbolType::Double => Value::Double(1.0),
+                    _ => bail!("Cannot use ++ or -- on {:?}", source),
+                };
+
+                let update = self.make_temporary(&Self::get_type(&source_rv));
                 self.instruction(Instruction::Binary(
-                    BinaryOperator::Subtract,
-                    source.clone(),
-                    Value::Int32(1),
-                    ret_dest.clone(),
+                    op,
+                    source_rv.clone(),
+                    inc_val,
+                    update.clone(),
                 ));
-                self.instruction(Instruction::Copy(ret_dest.clone(), source));
-                Ok(ExpResult::PlainValue(ret_dest))
+                self.store_into_lvalue(&update, &source)?;
+                return Ok(update);
             }
             Token::Negate => {
-                let source = self.do_factor_and_convert()?;
+                self.next_token()?;
+                let source = self.do_unary()?;
+                let source = self.make_rvalue(&source)?;
                 if source.is_pointer() {
                     bail!("Cannot use ~ on pointer type");
                 }
-                let dest_name = self.make_temporary();
-                let ret_dest = Value::Variable(dest_name.clone(), Self::get_type(&source));
-                let unop = Instruction::Unary(
-                    UnaryOperator::Negate,
-                    source.clone(),
-                    Value::Variable(dest_name, Self::get_type(&source)),
-                );
+                let ret_dest = self.make_temporary(&Self::get_type(&source));
+                let unop =
+                    Instruction::Unary(UnaryOperator::Negate, source.clone(), ret_dest.clone());
                 self.instruction(unop);
-                Ok(ExpResult::PlainValue(ret_dest))
+                ret_dest
             }
 
             Token::Complement => {
-                let source = self.do_factor_and_convert()?;
+                self.next_token()?;
+                let source = self.do_unary()?;
+                let source = self.make_rvalue(&source)?;
                 if source.is_double() || source.is_pointer() {
                     bail!("Cannot use ~ on double or pointer type");
                 }
-                let dest_name = self.make_temporary();
-                let ret_dest = Value::Variable(dest_name.clone(), Self::get_type(&source));
-                let unop = Instruction::Unary(
-                    UnaryOperator::Complement,
-                    source.clone(),
-                    Value::Variable(dest_name, Self::get_type(&source)),
-                );
+                let ret_dest = self.make_temporary(&Self::get_type(&source));
+                let unop =
+                    Instruction::Unary(UnaryOperator::Complement, source.clone(), ret_dest.clone());
                 self.instruction(unop);
-                Ok(ExpResult::PlainValue(ret_dest))
-            }
-            Token::LeftParen => {
-                // is this a cast?
-                let specifiers = self.parse_specifiers(false)?;
-
-                if specifiers.specified_type.is_some() {
-                    //cast
-
-                    let target_type = specifiers.specified_type.unwrap();
-                    let (abs, _) = self.parse_abstract_declarator(&target_type)?;
-                    let right = self.do_factor_and_convert()?;
-                    let dest_name = self.make_temporary();
-                    let ret_dest = Value::Variable(dest_name.clone(), abs.clone());
-                    let converted = self.convert_to(&right, &abs, true)?;
-                    self.instruction(Instruction::Copy(converted, ret_dest.clone()));
-                    Ok(ExpResult::PlainValue(ret_dest))
-                } else {
-                    // expression in parens
-                    let ret_dest = self.do_expression_and_convert(0)?;
-                    self.expect(Token::RightParen)?;
-                    Ok(ExpResult::PlainValue(ret_dest))
-                }
+                ret_dest
             }
             Token::Not => {
-                let source = self.do_factor_and_convert()?;
-                let dest_name = self.make_temporary();
-                let ret_dest = Value::Variable(dest_name.clone(), SymbolType::Int32);
+                self.next_token()?;
+                let source = self.do_unary()?;
+                let source = self.make_rvalue(&source)?;
+                let ret_dest = self.make_temporary(&SymbolType::Int32);
                 let unop = Instruction::Unary(UnaryOperator::LogicalNot, source, ret_dest.clone());
                 self.instruction(unop);
-                Ok(ExpResult::PlainValue(ret_dest))
+                ret_dest
             }
             // &  = address of
             Token::BitwiseAnd => {
-                let source = self.do_factor()?;
+                self.next_token()?;
+                let source = self.do_unary()?;
 
                 match source {
-                    ExpResult::PlainValue(var) => {
-                        if !self.is_lvalue(&var) {
-                            bail!("not lvalue {:?}", var);
+                    Value::Dereference(v) => *v.clone(),
+                    _ => {
+                        if !self.is_lvalue(&source) {
+                            bail!("not lvalue {:?}", source);
                         }
-                        let dest_name = self.make_temporary();
-                        let ret_dest = Value::Variable(
-                            dest_name.clone(),
-                            SymbolType::Pointer(Box::new(Self::get_type(&var))),
-                        );
-
-                        self.instruction(Instruction::GetAddress(var, ret_dest.clone()));
-                        Ok(ExpResult::PlainValue(ret_dest))
+                        let ret_dest = self.make_temporary(&SymbolType::Pointer(Box::new(
+                            Self::get_type(&source),
+                        )));
+                        self.instruction(Instruction::GetAddress(source, ret_dest.clone()));
+                        ret_dest
                     }
-                    ExpResult::DereferencedPointer(var, stype) => Ok(ExpResult::PlainValue(var)),
                 }
             }
             // * = dereference
             Token::Multiply => {
-                let source = self.do_factor_and_convert()?;
+                self.next_token()?;
+                let source = self.do_unary()?;
+                let source = self.make_rvalue(&source)?;
+                if !source.is_pointer() {
+                    bail!("Expected pointer, got {:?}", source);
+                }
+                let deref = Value::Dereference(Box::new(source.clone()));
 
-                let pointed_type = Self::get_pointee_type(&Self::get_type(&source))?;
-                let xx = Ok(ExpResult::DereferencedPointer(source.clone(), pointed_type));
-                println!("dereference {:?}", xx);
-                xx
+                println!("dereference {:?}", deref);
+                deref
+            }
+
+            // not unary - is it a cast?
+            Token::LeftParen
+                if matches!(
+                    self.peek_n(1)?,
+                    Token::Int | Token::Double | Token::Signed | Token::Unsigned | Token::Long
+                ) =>
+            {
+                self.next_token()?;
+                let specifiers = self.parse_specifiers(false)?;
+
+                if specifiers.specified_type.is_none() {
+                    bail!("Expected type specifier after (");
+                }
+                let target_type = specifiers.specified_type.unwrap();
+                let (abs, _) = self.parse_abstract_declarator(&target_type)?;
+                let source = self.do_unary()?;
+                let source = self.make_rvalue(&source)?;
+
+                let ret_dest = self.make_temporary(&abs);
+                let converted = self.convert_to(&source, &abs, true)?;
+                self.instruction(Instruction::Copy(converted, ret_dest.clone()));
+                ret_dest
+            }
+            _ => self.do_postfix()?,
+        };
+        Ok(ret_val)
+    }
+    fn do_postfix(&mut self) -> Result<Value> {
+        /*
+        <postfix-exp> ::= <primary-exp> { "[" <exp> "] } ["++"|"--"]
+        */
+
+        let primary = self.do_primary()?;
+        loop {
+            let token = self.peek()?;
+            if token != Token::LeftBracket {
+                break;
+            }
+            self.next_token()?;
+            let _index = self.do_expression(0)?;
+            self.expect(Token::RightBracket)?;
+            if !primary.is_pointer() {
+                bail!("Expected pointer, got {:?}", primary);
+            }
+        }
+        // postfix ++ and --
+        let token = self.peek()?;
+        if token == Token::PlusPlus || token == Token::MinusMinus {
+            self.next_token()?;
+
+            let op = if token == Token::PlusPlus {
+                BinaryOperator::Add
+            } else {
+                BinaryOperator::Subtract
+            };
+
+            let primary_rv = self.make_rvalue(&primary)?;
+
+            // the value we will return
+
+            let ret_dest = self.make_temporary(&Self::get_type(&primary_rv));
+            self.instruction(Instruction::Copy(primary_rv.clone(), ret_dest.clone()));
+
+            // the value we will store into the lvalue
+
+            let update = self.make_temporary(&Self::get_type(&primary_rv));
+
+            let inc_val = match Self::get_type(&primary_rv) {
+                SymbolType::Int32 => Value::Int32(1),
+                SymbolType::UInt32 => Value::UInt32(1),
+                SymbolType::Int64 => Value::Int64(1),
+                SymbolType::UInt64 => Value::UInt64(1),
+                SymbolType::Double => Value::Double(1.0),
+                _ => bail!("Cannot use ++ or -- on {:?}", primary_rv),
+            };
+            self.instruction(Instruction::Binary(
+                op,
+                primary_rv.clone(),
+                inc_val,
+                update.clone(),
+            ));
+            self.store_into_lvalue(&update, &primary)?;
+            return Ok(ret_dest);
+        } else {
+            return Ok(primary);
+        }
+    }
+    fn do_primary(&mut self) -> Result<Value> {
+        /*
+        <primary-exp> ::= <const>
+                        | <identifier>
+                        | "(" <exp> ")"
+                        | <identifier> "(" [ <argument-list> ] ")"
+        */
+        let token = self.next_token()?;
+        println!("do_primary {:?}", token);
+        let primary = match token {
+            Token::Constant(val) => {
+                println!("val: {}", val);
+                Value::Int32(val)
+            }
+            Token::LongConstant(val) => {
+                println!("val: {}", val);
+                Value::Int64(val)
+            }
+            Token::UConstant(val) => {
+                println!("val: {}", val);
+                Value::UInt32(val)
+            }
+            Token::ULongConstant(val) => {
+                println!("val: {}", val);
+                Value::UInt64(val)
+            }
+            Token::F64Constant(val) => {
+                println!("val: {}", val);
+                Value::Double(val)
+            }
+            Token::LeftParen => {
+                let ret_dest = self.do_expression(0)?;
+                self.expect(Token::RightParen)?;
+                ret_dest
             }
             Token::Identifier(name) => {
                 // is this a function call?
@@ -769,7 +812,9 @@ impl Parser {
                             break;
                         }
 
-                        let arg = self.do_expression_and_convert(0)?;
+                        let arg = self.do_expression(0)?;
+                        let arg = self.make_rvalue(&arg)?;
+
                         let converted_arg = self.convert_to(&arg, &symargs[argidx], false)?;
                         argidx += 1;
                         args.push(converted_arg);
@@ -797,10 +842,9 @@ impl Parser {
                         );
                     }
 
-                    let dest_name = self.make_temporary();
-                    let ret_dest = Value::Variable(dest_name.clone(), *return_type.clone()); // TODO
+                    let ret_dest = self.make_temporary(&return_type.clone()); // TODO
                     self.instruction(Instruction::FunCall(name, args, ret_dest.clone()));
-                    Ok(ExpResult::PlainValue(ret_dest))
+                    ret_dest
                 } else if let Some((symbol, _)) = self.lookup_symbol(&name) {
                     if symbol.stype.is_function() {
                         bail!("Expected variable, got function {:?}", name);
@@ -808,15 +852,9 @@ impl Parser {
                     if symbol.scope_pull {
                         let real_symbol = self.get_global_symbol(&name).clone();
 
-                        Ok(ExpResult::PlainValue(Value::Variable(
-                            real_symbol.rename.clone(),
-                            real_symbol.stype.clone(),
-                        )))
+                        Value::Variable(real_symbol.rename.clone(), real_symbol.stype.clone())
                     } else {
-                        Ok(ExpResult::PlainValue(Value::Variable(
-                            symbol.rename,
-                            symbol.stype,
-                        )))
+                        Value::Variable(symbol.rename, symbol.stype)
                         // SymbolDetails::ScopePull => {
                         //     let real_symbol = self.get_global_symbol(&name).clone();
 
@@ -833,7 +871,8 @@ impl Parser {
             _ => {
                 unreachable!("Expected constant, got {:?}", token);
             }
-        }
+        };
+        Ok(primary)
     }
     fn precedence(token: &Token) -> i32 {
         match token {

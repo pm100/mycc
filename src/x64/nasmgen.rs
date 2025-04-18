@@ -402,7 +402,7 @@ impl X64CodeGenerator {
             Operand::ImmediateI64(value) => value.to_string(),
             Operand::ImmediateU32(value) => value.to_string(),
             Operand::ImmediateU64(value) => value.to_string(),
-            Operand::ImmediateF64(value) => todo!(),
+            // Operand::ImmediateF64(value) => todo!(),
             Operand::Pseudo(_) => panic!("Pseudo register not supported"),
             Operand::Register(register) => Self::get_reg_name(register, assembly_type),
 

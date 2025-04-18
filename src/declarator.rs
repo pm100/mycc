@@ -1,5 +1,4 @@
 use crate::{
-    expect,
     lexer::Token,
     parser::Parser,
     symbols::{Specifiers, SymbolType},

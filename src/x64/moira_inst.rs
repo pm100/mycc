@@ -59,7 +59,7 @@ pub enum Operand {
     ImmediateI64(i64),
     ImmediateU32(u32),
     ImmediateU64(u64),
-    ImmediateF64(f64),
+    // ImmediateF64(f64),
     Pseudo(String),
     Memory(Register, i32),
     Data(String),

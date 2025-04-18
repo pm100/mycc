@@ -20,6 +20,8 @@ pub enum Token {
     QuestionMark,
     Colon,
     Comma,
+    LeftBracket,
+    RightBracket,
 
     // basics
     Identifier(String),
@@ -265,7 +267,8 @@ impl Lexer {
                         Token::Remainder
                     }
                 }
-
+                '[' => Token::LeftBracket,
+                ']' => Token::RightBracket,
                 _ => {
                     if char.is_ascii_digit() || char == '.' {
                         let t = self.number()?;

@@ -3,7 +3,6 @@ use backtrace::{Backtrace, BacktraceFrame, BacktraceSymbol};
 
 use std::{
     collections::{HashMap, VecDeque},
-    mem::discriminant,
     path::{Path, PathBuf},
 };
 
@@ -28,21 +27,21 @@ pub struct Parser {
     lexer: Lexer,
     source_file: PathBuf,
     tacky: TackyProgram,
-    next_temporary: usize,
+    pub next_temporary: usize,
     eof_hit: bool,
     peeked_tokens: VecDeque<Token>,
     // original name => new name
     local_variables: Vec<HashMap<String, VariableName>>,
     labels: HashMap<String, bool>,
-    next_name: usize,
+    pub next_name: usize,
     continue_label_stack: Vec<String>,
     switch_context_stack: Vec<SwitchContext>,
     break_label_stack: Vec<String>,
     pub(crate) symbol_stack: Vec<HashMap<String, Symbol>>,
-    pub(crate) nest: String,
     current_function_name: String,
     in_function_body: bool,
-    externs: HashMap<String, Extern>,
+    pub externs: HashMap<String, Extern>,
+    // depth: usize,
 }
 
 impl Parser {
@@ -57,7 +56,7 @@ impl Parser {
             local_variables: Vec::new(),
             labels: HashMap::new(),
             next_name: 0,
-            nest: String::new(),
+
             continue_label_stack: Vec::new(),
             switch_context_stack: Vec::new(),
             break_label_stack: Vec::new(),
@@ -65,6 +64,7 @@ impl Parser {
             current_function_name: String::new(),
             in_function_body: false,
             externs: HashMap::new(),
+            // depth: 0,
         }
     }
 
@@ -367,7 +367,6 @@ impl Parser {
         Ok(())
     }
     fn do_block_item(&mut self) -> Result<()> {
-        self.nest.clear();
         if !self.do_function_or_variable(true, false)? {
             self.do_statement()?;
         }
@@ -650,7 +649,7 @@ impl Parser {
         };
 
         if init {
-            let val = self.do_expression(0)?.as_plain_value().unwrap().clone();
+            let val = self.do_rvalue_expression()?;
             if self.in_function_body && is_auto {
                 //
                 let converted = self.convert_by_assignment(&val, &symbol_type)?;
@@ -736,7 +735,7 @@ impl Parser {
                     self.do_label()?;
                     self.do_statement()?;
                 } else {
-                    self.do_expression(0)?;
+                    self.do_rvalue_expression()?;
                     self.expect(Token::SemiColon)?;
                 }
             }
@@ -759,25 +758,12 @@ impl Parser {
         self.expect(Token::LeftParen)?;
         let token = self.peek()?;
 
-        // init clause?
-        //match token {
-        // Token::Int => {
-        //     // eats the semi colon
-        //     self.do_function_or_variable(false, false)?;
-        // }
-        // Token::SemiColon => {
-        //     self.next_token()?;
-        // }
-        // _ => {
-        //     self.do_expression(0)?;
-        //     self.expect(Token::SemiColon)?;
-        // }
         if token != Token::SemiColon {
             let is_dec = self.do_function_or_variable(false, false)?;
             if is_dec {
             } else {
                 // bail!("Expected variable declaration or expression");
-                self.do_expression(0)?;
+                self.do_rvalue_expression()?;
                 self.expect(Token::SemiColon)?;
             }
         } else {
@@ -791,7 +777,7 @@ impl Parser {
         let cond = if token == Token::SemiColon {
             Value::Int32(1)
         } else {
-            self.do_expression(0)?.as_plain_value().unwrap().clone()
+            self.do_rvalue_expression()?
         };
         self.instruction(Instruction::JumpIfZero(cond, label_end.clone()));
         self.expect(Token::SemiColon)?;
@@ -802,7 +788,7 @@ impl Parser {
         self.instruction(Instruction::Label(label_inc.clone()));
         let token = self.peek()?;
         if token != Token::RightParen {
-            self.do_expression(0)?;
+            self.do_rvalue_expression()?;
         }
         self.expect(Token::RightParen)?;
         // ===================== goto START
@@ -830,7 +816,7 @@ impl Parser {
 
         self.instruction(Instruction::Label(label_start.clone()));
         self.expect(Token::LeftParen)?;
-        let cond = self.do_expression(0)?.as_plain_value().unwrap().clone();
+        let cond = self.do_rvalue_expression()?;
         self.instruction(Instruction::JumpIfZero(cond, label_end.clone()));
         self.expect(Token::RightParen)?;
         self.do_statement()?;
@@ -855,7 +841,7 @@ impl Parser {
         self.expect(Token::While)?;
         self.expect(Token::LeftParen)?;
         self.instruction(Instruction::Label(label_cond.clone()));
-        let cond = self.do_expression(0)?.as_plain_value().unwrap().clone();
+        let cond = self.do_rvalue_expression()?;
         self.instruction(Instruction::JumpIfZero(cond, label_end.clone()));
         self.expect(Token::RightParen)?;
         self.expect(Token::SemiColon)?;
@@ -906,7 +892,7 @@ impl Parser {
         let (func_sym, _) = self.lookup_global_symbol(func_name).unwrap();
         let ret_type = *func_sym.stype.as_function().unwrap().1.clone();
 
-        let val = self.do_expression(0)?.as_plain_value().unwrap().clone();
+        let val = self.do_rvalue_expression()?;
         let converted_val = self.convert_by_assignment(&val, &ret_type)?;
         self.instruction(Instruction::Return(converted_val));
         self.expect(Token::SemiColon)?;
@@ -943,7 +929,7 @@ impl Parser {
     fn do_if(&mut self) -> Result<()> {
         self.next_token()?;
         self.expect(Token::LeftParen)?;
-        let cond = self.do_expression(0)?.as_plain_value().unwrap().clone();
+        let cond = self.do_rvalue_expression()?;
         self.expect(Token::RightParen)?;
         let label_false = self.make_label("if_false");
         let label_end = self.make_label("if_end");
@@ -971,7 +957,7 @@ impl Parser {
         });
         // evaluate the condition once
 
-        let value = this.do_expression(0)?.as_plain_value().unwrap().clone();
+        let value = this.do_rvalue_expression()?;
         if Self::get_type(&value) == SymbolType::Double || value.is_pointer() {
             bail!("Switch value must be an integer");
         }
@@ -1030,7 +1016,7 @@ impl Parser {
         // then update thisxx labels to nextxx
 
         let case_value = if is_case {
-            let cv = self.do_expression(0)?.as_plain_value().unwrap().clone();
+            let cv = self.do_rvalue_expression()?;
             if !matches!(cv, Value::Int32(_))
                 && !matches!(cv, Value::Int64(_))
                 && !matches!(cv, Value::UInt32(_))
@@ -1071,7 +1057,7 @@ impl Parser {
 
         // condition or not? ie case vs default
         if let Some(mut cv) = case_value {
-            let dest = Value::Variable(self.make_temporary(), SymbolType::Int32);
+            let dest = Value::Variable(self.make_temporary_name(), SymbolType::Int32);
             if Self::get_type(&switch_value) != Self::get_type(&cv) {
                 cv = self.convert_to(&cv, &Self::get_type(&switch_value), false)?;
             }
@@ -1107,40 +1093,6 @@ impl Parser {
         self.do_case_or_default(false)?;
         Ok(())
     }
-    pub(crate) fn is_lvalue(&mut self, value: &Value) -> bool {
-        match value {
-            Value::Variable(var, _) => {
-                self.local_variables().values().any(|v| v.name == *var)
-                    || self.lookup_symbol(var).is_some()
-            }
-            _ => false,
-        }
-    }
-    pub(crate) fn expect(&mut self, token: Token) -> Result<Token> {
-        let nt = self.next_token()?;
-        if discriminant(&nt) != discriminant(&token) {
-            bail!("Expected {:?}, got {:?}", token, nt);
-        } else {
-            Ok(nt)
-        }
-    }
-
-    pub(crate) fn make_temporary(&mut self) -> String {
-        let temp = format!("$temp${}", self.next_temporary);
-        self.next_temporary += 1;
-        temp
-    }
-
-    pub(crate) fn make_newname(&mut self, name: &str) -> String {
-        let temp = format!("{}${}", name, self.next_name);
-        self.next_name += 1;
-        temp
-    }
-    pub(crate) fn make_label(&mut self, name: &str) -> String {
-        let temp = format!("_{}_{}", name, self.next_temporary);
-        self.next_temporary += 1;
-        temp
-    }
 
     pub(crate) fn instruction(&mut self, instruction: Instruction) {
         let skip_before_case = if let Some(context) = self.switch_context_stack.last() {
@@ -1152,7 +1104,7 @@ impl Parser {
             println!("skip_before_case {:?}", instruction);
             return;
         }
-        println!("{}instruction {:?}", self.nest, instruction);
+        println!("   instruction {:?}", instruction);
         self.tacky.add_instruction(instruction);
     }
     pub(crate) fn next_token(&mut self) -> Result<Token> {
@@ -1164,7 +1116,7 @@ impl Parser {
         if token == Token::Eof {
             self.eof_hit = true;
         }
-        //   println!("next_token {:?}", token);
+        // println!("next_token {:?}", token);
         Ok(token)
     }
     fn dump_var_map(&self) {
@@ -1200,51 +1152,10 @@ impl Parser {
     }
     pub(crate) fn peek(&mut self) -> Result<Token> {
         let token = self.peek_n(0);
-        //  println!("peek {:?}", token);
+        // println!("peek {:?}", token);
         token
     }
-    pub(crate) fn lookup_symbol(&self, name: &str) -> Option<(Symbol, bool)> {
-        for i in (0..self.symbol_stack.len()).rev() {
-            if let Some(sym) = self.symbol_stack[i].get(name) {
-                return Some((sym.clone(), i == self.symbol_stack.len() - 1));
-            }
-        }
-        None
-    }
-    pub(crate) fn get_global_symbol(&mut self, name: &str) -> Symbol {
-        self.symbol_stack[0].get(name).unwrap().clone()
-    }
-    pub(crate) fn lookup_global_symbol(&self, name: &str) -> Option<(Symbol, bool)> {
-        if let Some(sym) = self.symbol_stack[0].get(name) {
-            return Some((sym.clone(), self.symbol_stack.len() == 1));
-        }
-        None
-    }
-    fn insert_global_symbol(&mut self, name: &str, symbol: Symbol) {
-        println!("insert_global_symbol {:?}", symbol);
-        //   debug_assert!(!self.symbol_stack[0].contains_key(name));
-        self.symbol_stack
-            .get_mut(0)
-            .unwrap()
-            .insert(name.to_string(), symbol);
-    }
-    fn insert_symbol(&mut self, name: &str, symbol: Symbol) {
-        println!("insert_symbol {:?}", symbol);
-        self.symbol_stack
-            .last_mut()
-            .unwrap()
-            .insert(name.to_string(), symbol);
-    }
 
-    fn pop_symbols(&mut self) {
-        //  self.dump_symbols();
-        println!("pop_symbols {:?}", self.symbol_stack.len());
-        self.symbol_stack.pop();
-    }
-    fn push_symbols(&mut self) {
-        println!("push_symbols {:?}", self.symbol_stack.len());
-        self.symbol_stack.push(HashMap::new());
-    }
     pub(crate) fn peek_n(&mut self, n: usize) -> Result<Token> {
         if n >= self.peeked_tokens.len() {
             for _ in 0..n + 1 {
@@ -1254,22 +1165,7 @@ impl Parser {
         }
         Ok(self.peeked_tokens[n].clone())
     }
-    fn dump_symbols(&self) {
-        println!("=======symbol table dump=======");
-        for (i, sym) in self.symbol_stack.iter().enumerate() {
-            let pad = format!("{empty:>width$}", empty = "", width = i * 4);
-            if sym.is_empty() {
-                println!("{} empty", pad);
-            }
-            for (_, sym) in sym.iter() {
-                println!("{} {:?}", pad, sym);
-            }
-        }
-        for (sym, top) in self.externs.iter() {
-            println!("extern {} {:?}", sym, top);
-        }
-        println!("=======end symbol table dump=======");
-    }
+
     //https://www.reddit.com/r/rust/comments/6ojuxz/comment/dki11oe/?utm_source=share&utm_medium=web3x&utm_name=web3xcss&utm_term=1&utm_content=share_button
     fn _previous_symbol(level: u32) -> Option<BacktraceSymbol> {
         let (trace, _curr_file, _curr_line) = (Backtrace::new(), file!(), line!());

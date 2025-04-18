@@ -4,16 +4,11 @@ pub mod declarator;
 pub mod expr;
 pub mod lexer;
 pub mod parser;
+pub mod parser_utils;
 pub mod symbols;
 pub mod tacky;
-
-// pub mod x64 {
-//     pub mod moira;
-//     pub mod moira_inst;
-//     pub mod moiragen;
-//     pub mod nasmgen;
-// }
 pub mod x64;
+
 use anyhow::Result;
 use codegen::BackEnd;
 use log::{info, LevelFilter};
@@ -21,10 +16,8 @@ use simplelog::{CombinedLogger, Config, WriteLogger};
 use std::env;
 use std::fs::File;
 use x64::moiragen::X64BackEnd;
-
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-
 use clap::Parser;
 
 #[derive(Parser)]

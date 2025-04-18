@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 
-use backtrace::Symbol;
 use enum_as_inner::EnumAsInner;
 
 use crate::{symbols::SymbolType, x64::moira_inst::AssemblyType};
@@ -69,12 +68,17 @@ pub enum Value {
     UInt64(u64),
     Double(f64),
     Variable(String, SymbolType),
+    Dereference(Box<Value>),
 }
 
 impl Value {
     pub fn is_pointer(&self) -> bool {
         match self {
             Value::Variable(_, SymbolType::Pointer(_)) => true,
+            Value::Dereference(v) => match v.as_ref() {
+                Value::Variable(_, SymbolType::Pointer(_)) => true,
+                _ => false,
+            },
             _ => false,
         }
     }
@@ -182,6 +186,14 @@ impl TackyProgram {
                 SymbolType::Function(_, _) => AssemblyType::QuadWord, // TODO
                 SymbolType::Pointer(_) => AssemblyType::QuadWord,
             },
+            _ => todo!(), // Value::Dereference(v) => match v.as_ref() {
+                          //     Value::Int32(_) => AssemblyType::LongWord,
+                          //     Value::Int64(_) => AssemblyType::QuadWord,
+                          //     Value::UInt32(_) => AssemblyType::LongWord,
+                          //     Value::UInt64(_) => AssemblyType::QuadWord,
+                          //     Value::Double(_) => AssemblyType::QuadWord,
+                          //     _ => panic!("Invalid dereference type {:?}", v),
+                          // },
         }
     }
     pub(crate) fn add_instruction(&mut self, instruction: Instruction) {
