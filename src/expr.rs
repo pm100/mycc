@@ -1,3 +1,5 @@
+use std::fmt::Binary;
+
 use crate::{
     lexer::Token,
     parser::Parser,
@@ -1163,7 +1165,20 @@ impl Parser {
             ) => {
                 bail!("Cannot do math on pointers")
             }
-
+            (
+                BinaryOperator::GreaterThan
+                | BinaryOperator::LessThan
+                | BinaryOperator::GreaterThanOrEqual
+                | BinaryOperator::LessThanOrEqual,
+                SymbolType::Pointer(_),
+                SymbolType::Double
+                | SymbolType::Int32
+                | SymbolType::Int64
+                | SymbolType::UInt32
+                | SymbolType::UInt64,
+            ) => {
+                bail!("Cannot compare pointer to number")
+            }
             (BinaryOperator::ShiftLeft | BinaryOperator::ShiftRight, SymbolType::Pointer(_), _) => {
                 bail!("Cannot shift pointer")
             }

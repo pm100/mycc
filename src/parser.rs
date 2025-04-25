@@ -787,7 +787,7 @@ impl Parser {
         dest_type: &SymbolType,
         is_auto: bool,
     ) -> Result<Vec<Value>> {
-        let init = self.parse_initializer()?;
+        let init = self.parse_initializer(dest_type)?;
         // simple initializer or compound
         // assign via static or auto
         let vals = match (is_auto, &init) {
@@ -859,18 +859,28 @@ impl Parser {
             }
         }
     }
-    fn parse_initializer(&mut self) -> Result<Initializer> {
+    fn parse_initializer(&mut self, dest_type: &SymbolType) -> Result<Initializer> {
         let token = self.peek()?;
-        //  let mut values = Vec::new();
         match token {
             Token::LeftBrace => {
                 self.next_token()?;
                 let mut values = Vec::new();
                 while self.peek()? != Token::RightBrace {
-                    values.push(self.parse_initializer()?);
+                    if !dest_type.is_array() {
+                        bail!("Compound initializer not allowed here")
+                    }
+                    let nested = Self::get_array_type(dest_type)?;
+                    let size = Self::get_array_size(dest_type)?;
+                    values.push(self.parse_initializer(&nested)?);
                     if self.peek()? == Token::Comma {
                         self.next_token()?;
                     } else {
+                        if values.len() > size {
+                            bail!("Too many initializers for array");
+                        }
+                        for i in values.len()..size {
+                            values.push(Initializer::SingleInit(Value::Int32(0)));
+                        }
                         break;
                     }
                 }
@@ -883,6 +893,9 @@ impl Parser {
             }
             _ => {
                 let val = self.do_rvalue_expression()?;
+                if Self::get_type(&val) != *dest_type {
+                    bail!("Type mismatch in initializer");
+                }
                 Ok(Initializer::SingleInit(val))
             }
         }
