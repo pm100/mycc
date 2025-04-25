@@ -4,21 +4,89 @@ use crate::{
     symbols::{Specifiers, SymbolType},
 };
 use anyhow::{bail, Result};
+use enum_as_inner::EnumAsInner;
+#[derive(Debug, Clone)]
 pub struct Parameter {
-    pub name: String,
     pub stype: SymbolType,
+    pub decl: Declarator,
+}
+fn indent(str: &str) {
+    //let msg = format!("{:>width$}", str, width=INDENT as usize);
+    let pad = unsafe { format!("{empty:>width$}", empty = "", width = INDENT * 4) };
+    println!("{}{}", pad, str);
+}
+static mut INDENT: usize = 0;
+enum Suffix {
+    ParamList(Vec<Parameter>),
+    Index(Vec<usize>),
+    Nothing,
+}
+#[derive(Debug, Clone, EnumAsInner)]
+enum Declarator {
+    Identifier(String),
+    Pointer(Box<Declarator>),
+    Array(Box<Declarator>, usize),
+    Function(Vec<Parameter>, Box<Declarator>),
 }
 impl Parser {
     pub fn parse_declaration(&mut self) -> Result<(Specifiers, String, SymbolType, Vec<String>)> {
+        unsafe { INDENT = 0 };
         let specifiers = self.parse_specifiers(true)?;
         if specifiers.specified_type.is_none() {
             // its a statement , return effectively null
             return Ok((specifiers, String::new(), SymbolType::Int32, vec![]));
         }
         let base_type = specifiers.specified_type.clone().unwrap();
-        let (name, stype, params) = self.parse_declarator(&base_type)?;
-        println!("declaration {} {:?}", name, stype);
-        Ok((specifiers, name, stype, params))
+        let decl = self.parse_declarator()?;
+        println!("declaration {:?}", decl);
+        let res = self.process_declarator(&decl, &base_type)?;
+        println!("declaration {:?}", res);
+        //Ok((specifiers, name, stype, params))
+        // bail!("Expected identifier got {:?}", decl);
+        Ok((specifiers, res.0, res.1, res.2))
+    }
+
+    fn process_declarator(
+        &mut self,
+        decl: &Declarator,
+        base_type: &SymbolType,
+    ) -> Result<(String, SymbolType, Vec<String>)> {
+        match decl {
+            Declarator::Identifier(name) => Ok((name.clone(), base_type.clone(), vec![])),
+            Declarator::Pointer(pdecl) => {
+                let stype = SymbolType::Pointer(Box::new(base_type.clone()));
+                self.process_declarator(pdecl, &stype)
+            }
+            Declarator::Array(pdecl, size) => {
+                let stype = SymbolType::Array(Box::new(base_type.clone()), *size);
+                self.process_declarator(pdecl, &stype)
+            }
+            Declarator::Function(params, decl) => {
+                let unbox = *decl.clone();
+                let s = match unbox {
+                    Declarator::Identifier(name) => name.clone(),
+                    _ => bail!("bad function"),
+                };
+                //  bail!("Function type cannot be a function type");
+
+                let mut pnames = Vec::new();
+                let mut ptypes = Vec::new();
+                for param in params.iter() {
+                    let (name, ptype, _) = self.process_declarator(&param.decl, base_type)?;
+                    pnames.push(name);
+                    ptypes.push(ptype);
+                }
+                // let (ptype, pnames) = params
+                //     .iter()
+                //     .map(|p| {
+                //         let (name, ptype, _) = self.process_declarator(&p.decl, base_type)?;
+                //         (ptype, name)
+                //     })
+                //     .unzip();
+                let stype = SymbolType::Function(ptypes, Box::new(base_type.clone()));
+                Ok((s, stype, pnames))
+            }
+        }
     }
 
     pub fn parse_abstract_declarator(
@@ -47,81 +115,87 @@ impl Parser {
         self.expect(Token::RightParen)?;
         Ok((stype, params))
     }
-    fn parse_declarator(
-        &mut self,
-        base_type: &SymbolType,
-    ) -> Result<(String, SymbolType, Vec<String>)> {
-        println!("parse_declarator base_type {:?}", base_type);
-        if self.peek()? == Token::Multiply {
+    fn parse_declarator(&mut self) -> Result<Declarator> {
+        unsafe { INDENT += 1 };
+        indent("parse_declarator base_type ");
+        let ret = if self.peek()? == Token::Multiply {
             self.next_token()?;
-            let (pname, pstype, pargs) = self.parse_declarator(base_type)?;
-            match &pstype {
-                SymbolType::Function(args, ret) => {
-                    let ret_type = SymbolType::Pointer(ret.clone());
-                    let stype = SymbolType::Function(args.clone(), Box::new(ret_type));
-                    return Ok((pname, stype, pargs));
-                }
-                _ => {
-                    let stype = SymbolType::Pointer(Box::new(pstype));
-                    return Ok((pname, stype, pargs));
-                }
-            }
+            let pdecl = self.parse_declarator()?;
+            Declarator::Pointer(Box::new(pdecl))
         } else {
-            return self.parse_direct_declarator(base_type);
-        }
-    }
-
-    fn parse_direct_declarator(
-        &mut self,
-        base_type: &SymbolType,
-    ) -> Result<(String, SymbolType, Vec<String>)> {
-        // simple declarator
-        let (identifier, stype_args) = self.parse_simple(base_type)?;
-        println!(
-            "direct_declarator {} {:?} {:?}",
-            identifier, stype_args, base_type
-        );
-        let (new_type, _) = if let Some((stype, params)) = stype_args {
-            (stype, params)
-        } else {
-            (base_type.clone(), vec![])
+            self.parse_direct_declarator()?
         };
-        if self.peek()? == Token::LeftParen {
-            self.next_token()?;
-            // a function
-
-            let params = self.parse_param_list()?;
-            let names = params.iter().map(|p| p.name.clone()).collect::<Vec<_>>();
-            let stypes = params.iter().map(|p| p.stype.clone()).collect::<Vec<_>>();
-            if new_type.is_function() {
-                bail!("Function type cannot be a function type");
-            }
-            let stype = SymbolType::Function(stypes, Box::new(new_type.clone()));
-            Ok((identifier, stype, names))
-        } else {
-            // a variable
-
-            Ok((identifier, new_type.clone(), vec![]))
-        }
+        unsafe { INDENT -= 1 };
+        Ok(ret)
     }
-    fn parse_simple(
-        &mut self,
-        base_type: &SymbolType,
-    ) -> Result<(String, Option<(SymbolType, Vec<String>)>)> {
-        println!("parse_simple base_type {:?}", base_type);
+
+    fn parse_direct_declarator(&mut self) -> Result<Declarator> {
+        // simple declarator
+        let simp = self.parse_simple()?;
+        indent(&format!("direct_declarator after simp  {:?}", simp));
+
+        Ok(match self.parse_suffix()? {
+            Suffix::ParamList(params) => {
+                if simp.is_function() {
+                    bail!("Function type cannot be a function type");
+                }
+                // let names = params.iter().map(|p| p.name.clone()).collect::<Vec<_>>();
+                // let stypes = params.iter().map(|p| p.stype.clone()).collect::<Vec<_>>();
+                // let stype = SymbolType::Function(stypes, Box::new(new_type));
+                Declarator::Function(params, Box::new(simp))
+            }
+            Suffix::Index(indexes) => {
+                let mut adecl = simp; //              let mut atype = new_type.clone();
+                for index in indexes.iter().rev() {
+                    adecl = Declarator::Array(Box::new(adecl), *index);
+                }
+                adecl
+            }
+            Suffix::Nothing => simp,
+        })
+    }
+    fn parse_simple(&mut self) -> Result<Declarator> {
+        indent("parse_simple ");
         match self.peek()? {
             Token::Identifier(id) => {
                 self.next_token()?;
-                return Ok((id, None));
+                return Ok(Declarator::Identifier(id));
             }
             Token::LeftParen => {
                 self.next_token()?;
-                let (identifier, stype, params) = self.parse_declarator(base_type)?;
+                let decl = self.parse_declarator()?;
                 self.expect(Token::RightParen)?;
-                Ok((identifier, Some((stype, params))))
+                Ok(decl)
             }
             _ => bail!("Expected identifierxx got{:?}", self.peek()?),
         }
+    }
+
+    fn parse_suffix(&mut self) -> Result<Suffix> {
+        let token = self.peek()?;
+        Ok(match token {
+            Token::LeftParen => {
+                self.next_token()?;
+                let params = self.parse_param_list()?;
+                //self.expect(Token::RightParen)?;
+                Suffix::ParamList(params)
+            }
+            Token::LeftBracket => {
+                let mut array_sizes = Vec::new();
+                loop {
+                    self.next_token()?;
+                    let index = self.do_rvalue_expression()?;
+                    self.expect(Token::RightBracket)?;
+                    let index = Self::get_integer(&index)?;
+                    array_sizes.push(index);
+                    if self.peek()? != Token::LeftBracket {
+                        break;
+                    }
+                }
+                Suffix::Index(array_sizes)
+            }
+            _ => Suffix::Nothing,
+        })
     }
     fn parse_param_list(&mut self) -> Result<Vec<Parameter>> {
         let mut parameters = Vec::new();
@@ -152,9 +226,9 @@ impl Parser {
             // parse one param
             let param = self.parse_one_param()?;
 
-            if parameters.iter().any(|p| p.name == param.name) {
-                bail!("Duplicate parameter name: {}", param.name);
-            }
+            // if parameters.iter().any(|p| p.name == param.name) {
+            //     bail!("Duplicate parameter name: {}", param.name);
+            // }
             parameters.push(param);
             if self.peek()? == Token::RightParen {
                 self.next_token()?;
@@ -167,9 +241,12 @@ impl Parser {
     fn parse_one_param(&mut self) -> Result<Parameter> {
         let specifiers = self.parse_specifiers(false)?;
         let base_type = specifiers.specified_type.clone().unwrap();
-        let (name, stype, _) = self.parse_declarator(&base_type)?;
-        println!("param {} {:?} {:?}", name, specifiers, stype);
-        Ok(Parameter { name, stype })
+        let param = self.parse_declarator()?;
+        indent(&format!("{:?}", param));
+        Ok(Parameter {
+            stype: base_type,
+            decl: param,
+        })
     }
 
     pub fn parse_specifiers(&mut self, allow_storage: bool) -> Result<Specifiers> {

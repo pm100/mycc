@@ -1,8 +1,10 @@
 use anyhow::{bail, Result};
 use backtrace::{Backtrace, BacktraceFrame, BacktraceSymbol};
+use enum_as_inner::EnumAsInner;
 
 use std::{
     collections::{HashMap, VecDeque},
+    mem::offset_of,
     path::{Path, PathBuf},
 };
 
@@ -42,6 +44,11 @@ pub struct Parser {
     in_function_body: bool,
     pub externs: HashMap<String, Extern>,
     // depth: usize,
+}
+#[derive(Debug, Clone, PartialEq, EnumAsInner)]
+enum Initializer {
+    SingleInit(Value),
+    CompoundInit(Vec<Initializer>),
 }
 
 impl Parser {
@@ -88,6 +95,7 @@ impl Parser {
                     // its a statement, thats an error here
                 }
                 Err(e) => {
+                    println!("{:?}", e);
                     let message = format!(
                         "{}:{} {}",
                         self.source_file.display(),
@@ -260,6 +268,9 @@ impl Parser {
                         bail!("Function {} already declared as variable1", name);
                     }
                     true
+                }
+                SymbolType::Array(_, _) => {
+                    bail!("Function {} already declared as array", name);
                 }
             }
         } else {
@@ -648,56 +659,120 @@ impl Parser {
             }
         };
 
-        if init {
-            let val = self.do_rvalue_expression()?;
-            if self.in_function_body && is_auto {
-                //
-                let converted = self.convert_by_assignment(&val, &symbol_type)?;
-                self.instruction(Instruction::Copy(
-                    converted,
-                    Value::Variable(rename, symbol_type),
-                ));
-            } else {
-                if val.is_variable() {
-                    bail!("Static variable must be initialized to a constant");
-                }
-                if !is_auto {
-                    let converted =
-                        if symbol_type.is_pointer() && Self::is_null_pointer_constant(&val) {
-                            Value::UInt32(0)
-                        } else {
-                            self.convert_by_assignment(&val, &symbol_type)?
-                        };
-                    //let converted = self.convert_by_assignment(&val, &symbol_type)?;
-                    self.externs
-                        .entry(rename.to_string())
-                        .and_modify(|e| {
-                            e.state = SymbolState::Defined;
-                            e.value = Some(converted.clone());
-                        })
-                        .or_insert(Extern {
-                            name: rename.to_string(),
-                            linkage: linkage.clone(),
-                            state: SymbolState::Defined,
-                            value: Some(converted),
-                            stype: symbol_type.clone(),
-                        });
-                }
-            }
-        } else if !is_auto {
+        // get the initializer value  - if any
+
+        let init_value: Vec<Value> = if init {
+            self.do_initializer(&rename, &symbol_type, is_auto)?
+        } else {
+            vec![]
+        };
+        // if init {
+        //     // let val = self.do_rvalue_expression()?;
+        //     let val = self.parse_initializer()?;
+        //     println!("val = {:?}", val);
+        //     // let val = match val {
+        //     //     Initializer::SingleInit(v) => v,
+        //     //     Initializer::CompoundInit(_) => {
+        //     //         bail!("Compound initializer not allowed here")
+        //     //     }
+        //     // };
+        //     if self.in_function_body && is_auto {
+        //         //
+        //         let converted = self.convert_by_assignment(&val, &symbol_type)?;
+        //         self.instruction(Instruction::Copy(
+        //             converted.clone(),
+        //             Value::Variable(rename.clone(), symbol_type.clone()),
+        //         ));
+        //         Some(converted)
+        //     } else {
+        //         // if val.is_variable() {
+        //         //     bail!("Static variable must be initialized to a constant");
+        //         // }
+        //         if !is_auto {
+        //             let converted =
+        //                 if symbol_type.is_pointer() && Self::is_null_pointer_constant(&val) {
+        //                     Value::UInt32(0)
+        //                 } else {
+        //                     self.convert_by_assignment(&val, &symbol_type)?
+        //                 };
+
+        //             // self.externs
+        //             //     .entry(rename.to_string())
+        //             //     .and_modify(|e| {
+        //             //         e.state = SymbolState::Defined;
+        //             //         e.value = Some(converted.clone());
+        //             //     })
+        //             //     .or_insert(Extern {
+        //             //         name: rename.to_string(),
+        //             //         linkage: linkage.clone(),
+        //             //         state: SymbolState::Defined,
+        //             //         value: Some(converted.clone()),
+        //             //         stype: symbol_type.clone(),
+        //             //     });
+        //             Some(converted)
+        //         } else {
+        //             None
+        //         }
+        //     }
+        //     //  converted
+        //     // } else if !is_auto {
+        //     //     self.externs
+        //     //         .entry(rename.to_string())
+        //     //         .and_modify(|e| {
+        //     //             println!("update extern {:?} {:?}", rename, e);
+        //     //             if e.state != SymbolState::Defined && state != SymbolState::Declared {
+        //     //                 e.state = SymbolState::Defined
+        //     //             }
+        //     //         })
+        //     //         .or_insert(Extern {
+        //     //             name: rename.to_string(),
+        //     //             linkage: linkage.clone(),
+        //     //             state, //SymbolState::Defined,
+        //     //             value: None,
+        //     //             stype: symbol_type.clone(),
+        //     //         });
+        //     //     None
+        //     // } else {
+        // } else {
+        //     None
+        // };
+
+        // update the static / externs table
+
+        if !is_auto {
             self.externs
                 .entry(rename.to_string())
+                // already exists - update it
                 .and_modify(|e| {
-                    if e.state != SymbolState::Defined && state != SymbolState::Declared {
-                        e.state = SymbolState::Defined
+                    println!("update extern {:?} {:?} {:?}", rename, e, init_value);
+                    match (init_value.is_empty(), e.state.clone()) {
+                        (true, SymbolState::Tentative | SymbolState::Declared) => {
+                            if state != SymbolState::Declared {
+                                e.state = SymbolState::Defined
+                            };
+                        }
+                        (false, _) => {
+                            e.state = SymbolState::Defined;
+                            e.value = init_value.clone();
+                        }
+                        (_, _) => {}
                     }
                 })
-                .or_insert(Extern {
-                    name: rename.to_string(),
-                    linkage: linkage.clone(),
-                    state, //SymbolState::Defined,
-                    value: None,
-                    stype: symbol_type.clone(),
+                // new extern - insert it
+                .or_insert_with(|| {
+                    let new = Extern {
+                        name: rename.to_string(),
+                        linkage: linkage.clone(),
+                        state: if init_value.is_empty() {
+                            state
+                        } else {
+                            SymbolState::Defined
+                        },
+                        value: init_value,
+                        stype: symbol_type.clone(),
+                    };
+                    println!("insert extern {:?} ", new);
+                    new
                 });
         }
         self.dump_symbols();
@@ -706,6 +781,112 @@ impl Parser {
         Ok(())
     }
 
+    fn do_initializer(
+        &mut self,
+        name: &String,
+        dest_type: &SymbolType,
+        is_auto: bool,
+    ) -> Result<Vec<Value>> {
+        let init = self.parse_initializer()?;
+        // simple initializer or compound
+        // assign via static or auto
+        let vals = match (is_auto, &init) {
+            (true, Initializer::SingleInit(v)) => {
+                // int x = 42;
+                let converted = self.convert_by_assignment(&v, &dest_type.clone())?;
+                self.instruction(Instruction::Copy(
+                    converted.clone(),
+                    Value::Variable(name.clone(), dest_type.clone()),
+                ));
+                vec![]
+            }
+            (false, Initializer::SingleInit(v)) => {
+                // static int = 42;
+                if v.is_variable() {
+                    bail!("Static variable must be initialized to a constant");
+                }
+                let converted = if dest_type.is_pointer() && Self::is_null_pointer_constant(&v) {
+                    Value::UInt32(0)
+                } else {
+                    self.convert_by_assignment(&v, &dest_type)?
+                };
+                vec![converted]
+            }
+            (true, Initializer::CompoundInit(_)) => {
+                //  {
+                //      int x[3] = {1,2,3};
+                //  }
+                if !dest_type.is_array() {
+                    bail!("Compound initializer not allowed here")
+                }
+                let values = Self::unwind_nested(&init);
+                let elem_type = Self::get_inner_array_type(dest_type)?;
+                // let size = Self::get_size_of_stype(&atype);
+                let mut offset = 0;
+                for v in &values {
+                    let converted = self.convert_by_assignment(v, &elem_type)?;
+                    self.instruction(Instruction::CopyToOffset(
+                        converted.clone(),
+                        Value::Variable(name.clone(), dest_type.clone()),
+                        offset,
+                    ));
+                    let size = Self::get_size_of_stype(&elem_type);
+                    offset += size;
+                }
+                vec![]
+            }
+            (false, Initializer::CompoundInit(_)) => {
+                // static int x[3] = {1,2,3};
+
+                if !dest_type.is_array() {
+                    bail!("Compound initializer not allowed here")
+                }
+                let values = Self::unwind_nested(&init);
+                values
+            }
+        };
+        Ok(vals)
+    }
+    fn unwind_nested(compound_init: &Initializer) -> Vec<Value> {
+        match compound_init {
+            Initializer::SingleInit(v) => vec![v.clone()],
+            Initializer::CompoundInit(v) => {
+                let mut result = Vec::new();
+                for init in v {
+                    result.extend(Self::unwind_nested(init));
+                }
+                result
+            }
+        }
+    }
+    fn parse_initializer(&mut self) -> Result<Initializer> {
+        let token = self.peek()?;
+        //  let mut values = Vec::new();
+        match token {
+            Token::LeftBrace => {
+                self.next_token()?;
+                let mut values = Vec::new();
+                while self.peek()? != Token::RightBrace {
+                    values.push(self.parse_initializer()?);
+                    if self.peek()? == Token::Comma {
+                        self.next_token()?;
+                    } else {
+                        break;
+                    }
+                }
+                self.expect(Token::RightBrace)?;
+                if values.is_empty() {
+                    bail!("Empty initializer list");
+                }
+                Ok(Initializer::CompoundInit(values))
+                //Ok(values)
+            }
+            _ => {
+                let val = self.do_rvalue_expression()?;
+                Ok(Initializer::SingleInit(val))
+            }
+        }
+    }
     fn do_statement(&mut self) -> Result<()> {
         let token = self.peek()?;
         match token {
@@ -1116,7 +1297,7 @@ impl Parser {
         if token == Token::Eof {
             self.eof_hit = true;
         }
-        // println!("next_token {:?}", token);
+        println!("next_token {:?}", token);
         Ok(token)
     }
     fn dump_var_map(&self) {

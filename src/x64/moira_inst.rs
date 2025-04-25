@@ -1,3 +1,5 @@
+use enum_as_inner::EnumAsInner;
+
 #[derive(Debug, Clone)]
 pub enum Instruction {
     Ret,
@@ -35,6 +37,7 @@ pub enum AssemblyType {
     Double,
     Byte,
     Word,
+    ByteArray(usize, usize),
 }
 #[derive(Debug, Clone, PartialEq)]
 pub enum BinaryOperator {
@@ -52,7 +55,7 @@ pub enum BinaryOperator {
     FMul,
     FDiv,
 }
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, EnumAsInner)]
 pub enum Operand {
     Register(Register),
     ImmediateI32(i32),
@@ -63,6 +66,8 @@ pub enum Operand {
     Pseudo(String),
     Memory(Register, i32),
     Data(String),
+    PseudoMem(String, usize, usize),
+    Indexed(Register, Register, usize),
 }
 #[derive(Debug, Clone)]
 pub enum Register {

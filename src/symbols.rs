@@ -25,21 +25,9 @@ pub enum SymbolType {
     Double,
     Function(Vec<SymbolType>, Box<SymbolType>),
     Pointer(Box<SymbolType>),
+    Array(Box<SymbolType>, usize),
 }
-// #[derive(Debug, Clone, PartialEq, EnumAsInner)]
-// pub(crate) enum SymbolDetails {
-//     Function {
-//         return_type: SymbolType,
-//         args: Vec<SymbolType>,
-//     },
-//     //
-//     Variable {
-//         rename: String,
-//         stype: SymbolType,
-//         // value: Option<Value>, //TODO - remove this
-//     },
-//     ScopePull,
-// }
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum SymbolState {
     Defined,
@@ -49,9 +37,8 @@ pub enum SymbolState {
 #[derive(Debug, Clone, PartialEq)]
 pub enum SymbolLinkage {
     External,
-
     Internal,
-    None, //loalc stack var
+    None, //local stack var
 }
 #[derive(Debug, Clone, PartialEq)]
 pub struct Symbol {
@@ -68,7 +55,7 @@ pub struct Extern {
     pub name: String,
     pub linkage: SymbolLinkage,
     pub state: SymbolState,
-    pub value: Option<Value>,
+    pub value: Vec<Value>,
     pub stype: SymbolType,
 }
 impl Parser {
@@ -76,6 +63,34 @@ impl Parser {
         match stype {
             SymbolType::Pointer(t) => Ok(*t.clone()),
             _ => bail!("Not a pointer type"),
+        }
+    }
+    pub fn get_array_type(stype: &SymbolType) -> Result<SymbolType> {
+        match stype {
+            SymbolType::Array(t, _) => Ok(*t.clone()),
+            _ => bail!("Not an array"),
+        }
+    }
+
+    pub fn get_inner_array_type(stype: &SymbolType) -> Result<SymbolType> {
+        let mut stype = stype;
+        loop {
+            match stype {
+                SymbolType::Array(t, _) => {
+                    if let SymbolType::Array(t2, _) = &**t {
+                        stype = t;
+                    } else {
+                        return Ok(*t.clone());
+                    }
+                }
+                _ => bail!("Not an array"),
+            }
+        }
+    }
+    pub fn get_array_size(stype: &SymbolType) -> Result<usize> {
+        match stype {
+            SymbolType::Array(_, sz) => Ok(*sz),
+            _ => bail!("Not an array"),
         }
     }
     pub(crate) fn lookup_symbol(&self, name: &str) -> Option<(Symbol, bool)> {

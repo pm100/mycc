@@ -2,7 +2,10 @@ use std::collections::HashMap;
 
 use anyhow::Result;
 
-use crate::{symbols::SymbolType, tacky::StaticInit};
+use crate::{
+    symbols::SymbolType,
+    tacky::{StaticInit, Value},
+};
 
 use super::moira_inst::Instruction;
 
@@ -22,7 +25,7 @@ pub struct Function {
 #[derive(Debug, Clone)]
 pub struct StaticVariable {
     pub name: String,
-    pub value: StaticInit,
+    pub values: Vec<Value>,
     pub global: bool,
     pub external: bool,
     pub stype: SymbolType,
@@ -66,7 +69,7 @@ impl MoiraProgram {
         for top_var in self.top_vars.iter() {
             println!(
                 "TopVar: {} = {:?} Ext {}",
-                top_var.name, top_var.value, top_var.external
+                top_var.name, top_var.values, top_var.external
             );
         }
         for static_constant in self.static_constants.iter() {

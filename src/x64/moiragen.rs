@@ -41,7 +41,7 @@ impl X64BackEnd {
             self.moira.top_vars.push(StaticVariable {
                 name: data.name.clone(),
                 global: data.global,
-                value: data.init.clone(),
+                values: data.init.clone(),
                 external: data.external,
                 stype: data.stype.clone(),
             });
@@ -65,6 +65,10 @@ impl X64BackEnd {
             SymbolType::Double => AssemblyType::Double,
             SymbolType::Pointer(_) => AssemblyType::QuadWord,
             SymbolType::Function(_, _) => AssemblyType::QuadWord, // TODO
+            SymbolType::Array(stype, size) => {
+                let esize = Parser::get_size_of_stype(stype);
+                AssemblyType::ByteArray(esize * size, 16)
+            }
         }
     }
 
@@ -135,7 +139,7 @@ impl X64BackEnd {
         format!("{}_{:04}", label, self.instruction_counter)
     }
     fn gen_instruction(&mut self, instruction: &crate::tacky::Instruction) -> Result<()> {
-        println!("gen_instruction: {:?}", instruction);
+        //  println!("gen_instruction: {:?}", instruction);
         match instruction {
             tacky::Instruction::Return(value) => {
                 let (value, _stype, assembly_type) = self.get_value(value);
@@ -551,6 +555,72 @@ impl X64BackEnd {
 
                 self.moira(Instruction::Lea(src, dest));
             }
+            tacky::Instruction::AddPtr(ptr, idx, scal, dest) => {
+                let (ptr, _ptr_stype, _) = self.get_value(ptr);
+                let (idx, _idx_stype, _) = self.get_value(idx);
+                //  let (scal, _scal_stype, _) = self.get_value(scal);
+                let (dest, _dest_stype, _) = self.get_value(dest);
+                match &idx {
+                    Operand::ImmediateI64(idx) => {
+                        self.moira(Instruction::Mov(
+                            AssemblyType::QuadWord,
+                            ptr.clone(),
+                            Operand::Register(Register::RAX),
+                        ));
+                        self.moira(Instruction::Lea(
+                            Operand::Memory(Register::RAX, (*idx as isize * *scal) as i32),
+                            dest.clone(),
+                        ));
+                    }
+                    Operand::Data(v) | Operand::Pseudo(v) => {
+                        if *scal == 1 || *scal == 2 || *scal == 4 || *scal == 8 {
+                            self.moira(Instruction::Mov(
+                                AssemblyType::QuadWord,
+                                ptr.clone(),
+                                Operand::Register(Register::RAX),
+                            ));
+                            self.moira(Instruction::Mov(
+                                AssemblyType::QuadWord,
+                                idx.clone(),
+                                Operand::Register(Register::RDX),
+                            ));
+                            self.moira(Instruction::Lea(
+                                Operand::Indexed(Register::RAX, Register::RDX, *scal as usize),
+                                dest.clone(),
+                            ));
+                        } else {
+                            self.moira(Instruction::Mov(
+                                AssemblyType::QuadWord,
+                                ptr.clone(),
+                                Operand::Register(Register::RAX),
+                            ));
+                            self.moira(Instruction::Mov(
+                                AssemblyType::QuadWord,
+                                idx.clone(),
+                                Operand::Register(Register::RDX),
+                            ));
+                            self.moira(Instruction::Binary(
+                                BinaryOperator::Mult,
+                                AssemblyType::QuadWord,
+                                Operand::ImmediateU64(*scal as u64),
+                                Operand::Register(Register::RDX),
+                            ));
+                            self.moira(Instruction::Lea(
+                                Operand::Indexed(Register::RAX, Register::RDX, 1),
+                                dest.clone(),
+                            ));
+                        }
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            tacky::Instruction::CopyToOffset(src, dest, offset) => {
+                let (src, _src_stype, src_assembly_type) = self.get_value(src);
+                let (dest, _dest_stype, _) = self.get_value(dest);
+                let (name, size, _) = dest.as_pseudo_mem().unwrap();
+                let pm = Operand::PseudoMem(name.clone(), *size, *offset);
+                self.moira(Instruction::Mov(src_assembly_type, src, pm));
+            }
         }
         Ok(())
     }
@@ -799,11 +869,21 @@ impl X64BackEnd {
                         assembly_type,
                     )
                 } else {
-                    (
-                        Operand::Pseudo(register.clone()),
-                        symbol_type.clone(),
-                        assembly_type,
-                    )
+                    if symbol_type.is_array() {
+                        let (stype, size) = symbol_type.as_array().unwrap();
+                        let total_size = Parser::get_size_of_stype(&*stype) * size;
+                        (
+                            Operand::PseudoMem(register.clone(), total_size, 0),
+                            symbol_type.clone(),
+                            assembly_type,
+                        )
+                    } else {
+                        (
+                            Operand::Pseudo(register.clone()),
+                            symbol_type.clone(),
+                            assembly_type,
+                        )
+                    }
                 }
             }
             _ => {

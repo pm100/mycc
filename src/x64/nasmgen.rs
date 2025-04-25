@@ -1,8 +1,9 @@
-use crate::symbols::SymbolType;
+use crate::parser::Parser;
+use crate::symbols::{self, SymbolType};
 use crate::x64::moira::{Function, MoiraProgram, StaticConstant};
 
 //use crate::codegen::MoiraCompiler;
-use crate::tacky::StaticInit;
+use crate::tacky::{StaticInit, Value};
 use anyhow::Result;
 use std::collections::HashMap;
 use std::io::Write;
@@ -92,58 +93,102 @@ impl X64CodeGenerator {
         let hex = value.to_bits();
         format!("{:x}", hex)
     }
+    fn calculate_alignment(stype: &SymbolType) -> usize {
+        match stype {
+            SymbolType::Int32 | SymbolType::UInt32 => 4,
+            SymbolType::Int64 | SymbolType::UInt64 | SymbolType::Pointer(_) => 8,
+            SymbolType::Double => 16,
+            SymbolType::Array(_, _) => match Parser::get_inner_array_type(stype).unwrap() {
+                SymbolType::Int32 | SymbolType::UInt32 => 4,
+                SymbolType::Int64 | SymbolType::UInt64 | SymbolType::Pointer(_) => 8,
+                SymbolType::Double => 16,
+                _ => unreachable!(),
+            },
+            _ => unreachable!(),
+        }
+    }
     fn gen_vars(
         &mut self,
         moira: &MoiraProgram,
         writer: &mut BufWriter<std::fs::File>,
     ) -> Result<()> {
-        let mut extra_static_vars = Vec::new();
         for var in moira.top_vars.iter() {
-            writeln!(writer, "segment .data")?;
-
             if var.external {
                 writeln!(writer, "extern {}", var.name)?;
+                continue;
+            }
+            let empty = var.values.iter().all(|v| match v {
+                Value::Double(0.0) => true,
+                Value::Int32(0) => true,
+                Value::Int64(0) => true,
+                Value::UInt32(0) => true,
+                Value::UInt64(0) => true, // null pointer too
+
+                _ => false,
+            });
+            if empty {
+                writeln!(writer, "segment .bss")?;
             } else {
-                if var.global {
-                    writeln!(writer, "global {}", var.name)?;
-                }
-                match var.value {
-                    StaticInit::InitI32(value) => writeln!(writer, "{} dd {}", var.name, value)?,
-                    StaticInit::InitI64(value) => writeln!(writer, "{} dq {}", var.name, value)?,
-                    StaticInit::InitU32(value) => writeln!(writer, "{} dd {}", var.name, value)?,
-                    StaticInit::InitU64(value) => writeln!(writer, "{} dq {}", var.name, value)?,
-                    StaticInit::InitDouble(value) => {
-                        writeln!(writer, "{}: dq 0x{}", var.name, Self::double_to_hex(value))?
+                writeln!(writer, "segment .data")?;
+            }
+            if var.global {
+                writeln!(writer, "global {}", var.name)?;
+            }
+
+            let align = Self::calculate_alignment(&var.stype);
+            writeln!(writer, "align {}", align)?;
+
+            writeln!(writer, "{}: ", var.name)?;
+            if empty {
+                match var.stype {
+                    SymbolType::Int32 | SymbolType::UInt32 => writeln!(writer, " dd {}", 0)?,
+                    SymbolType::Int64 | SymbolType::UInt64 | SymbolType::Pointer(_) => {
+                        writeln!(writer, " dq {}", 0)?
                     }
-                    StaticInit::InitNone => {
-                        match var.stype {
-                            SymbolType::Int32 | SymbolType::UInt32 => {
-                                writeln!(writer, "{} dd 0", var.name)?
+                    SymbolType::Double => {
+                        writeln!(writer, " dq {}", 0)?;
+                        writeln!(writer, " dq {}", 0)?
+                    }
+                    SymbolType::Array(_, _) => {
+                        let size = Parser::get_array_size(&var.stype)?;
+                        let etype = Parser::get_inner_array_type(&var.stype)?;
+                        let size = size / Parser::get_size_of_stype(&etype);
+                        //let align = Self::calculate_alignment(etype);
+                        for i in 0..size {
+                            match etype {
+                                SymbolType::Int32 | SymbolType::UInt32 => {
+                                    writeln!(writer, " dd {}", 0)?
+                                }
+                                SymbolType::Int64 | SymbolType::UInt64 | SymbolType::Pointer(_) => {
+                                    writeln!(writer, " dq {}", 0)?
+                                }
+                                SymbolType::Double => {
+                                    writeln!(writer, " dq {}", 0)?;
+                                    writeln!(writer, " dq {}", 0)?
+                                }
+                                _ => unreachable!(),
                             }
-                            SymbolType::Int64 | SymbolType::UInt64 | SymbolType::Pointer(_) => {
-                                writeln!(writer, "align 8")?;
-                                writeln!(writer, "{} dq 0", var.name)?;
-                            }
-                            SymbolType::Double => {
-                                extra_static_vars.push(StaticConstant {
-                                    name: var.name.clone(),
-                                    align: 16,
-                                    value: StaticInit::InitDouble(0.0),
-                                });
-                            }
-                            _ => unreachable!("Unsupported type for static variable"),
-                        };
+                        }
+                    }
+                    _ => unreachable!(),
+                }
+            } else {
+                for init in var.values.iter() {
+                    match init {
+                        Value::Int32(value) => writeln!(writer, " dd {}", value)?,
+                        Value::Int64(value) => writeln!(writer, " dq {}", value)?,
+                        Value::UInt32(value) => writeln!(writer, " dd {}", value)?,
+                        Value::UInt64(value) => writeln!(writer, " dq {}", value)?,
+                        Value::Double(value) => {
+                            writeln!(writer, " dq 0x{}", Self::double_to_hex(*value))?
+                        }
+                        _ => unreachable!(),
                     }
                 }
-                //                writeln!(writer, "{} dd {}", var.name, var.value)?;
             }
         }
-        //  extra_static_vars.eappend(moira.static_constants.values().collect::<Vec<_>>());
-        for const_value in moira
-            .static_constants
-            .values()
-            .chain(extra_static_vars.iter())
-        {
+
+        for const_value in moira.static_constants.values() {
             writeln!(writer, "segment .rodata")?;
             match const_value.value {
                 StaticInit::InitDouble(value) => {
@@ -166,6 +211,9 @@ impl X64CodeGenerator {
         writer: &mut BufWriter<std::fs::File>,
     ) -> Result<()> {
         let fixed_instructions = self.fixup_pass(function)?;
+        for ps in self.pseudo_registers.iter() {
+            println!("{:?} -> {} 0x{:x}", ps.0, ps.1, ps.1);
+        }
 
         self.gen_prologue(function, writer)?;
         for instruction in fixed_instructions.iter() {
@@ -198,7 +246,7 @@ impl X64CodeGenerator {
         instruction: &Instruction,
         writer: &mut BufWriter<std::fs::File>,
     ) -> Result<()> {
-        println!("Generating instruction: {:?}", instruction);
+        // println!("Generating instruction: {:?}", instruction);
         match instruction {
             Instruction::Ret => {
                 writeln!(writer, "        mov rsp, rbp")?;
@@ -413,6 +461,8 @@ impl X64CodeGenerator {
                     AssemblyType::Byte => "BYTE",
                     AssemblyType::Word => "WORD",
                     AssemblyType::Double => "",
+                    AssemblyType::ByteArray(_, _) => "",
+                    _ => todo!(),
                 };
 
                 format!(
@@ -429,8 +479,37 @@ impl X64CodeGenerator {
                     AssemblyType::Byte => "BYTE",
                     AssemblyType::Word => "WORD",
                     AssemblyType::Double => "",
+                    _ => todo!(),
                 };
                 format!("{} [{}]", qual, data)
+            }
+            Operand::PseudoMem(data, size, offset) => {
+                let qual = match assembly_type {
+                    AssemblyType::LongWord => "DWORD",
+                    AssemblyType::QuadWord => "QWORD",
+                    AssemblyType::Byte => "BYTE",
+                    AssemblyType::Word => "WORD",
+                    AssemblyType::Double => "",
+                    _ => todo!(),
+                };
+                format!("{} [{}]", qual, data)
+            }
+            Operand::Indexed(base, index, scale) => {
+                let qual = match assembly_type {
+                    AssemblyType::LongWord => "DWORD",
+                    AssemblyType::QuadWord => "QWORD",
+                    AssemblyType::Byte => "BYTE",
+                    AssemblyType::Word => "WORD",
+                    AssemblyType::Double => "",
+                    _ => todo!(),
+                };
+                format!(
+                    "{} [{} + {} * {}]",
+                    qual,
+                    Self::get_reg_name(base, &AssemblyType::QuadWord),
+                    Self::get_reg_name(index, &AssemblyType::QuadWord),
+                    scale
+                )
             }
         };
         Ok(val_str)
@@ -470,9 +549,9 @@ impl X64CodeGenerator {
     }
     pub fn get_scratch_register1(assembly_type: &AssemblyType) -> Operand {
         match assembly_type {
-            AssemblyType::LongWord | AssemblyType::QuadWord => Operand::Register(SCRATCH_REGISTER1),
+            //  AssemblyType::LongWord | AssemblyType::QuadWord => Operand::Register(SCRATCH_REGISTER1),
             AssemblyType::Double => Operand::Register(FLOAT_SCRATCH1),
-            _ => unreachable!(),
+            _ => Operand::Register(SCRATCH_REGISTER1),
         }
     }
     pub fn get_scratch_register2(assembly_type: &AssemblyType) -> Operand {
@@ -488,7 +567,7 @@ impl X64CodeGenerator {
         let mut new_instructions = Vec::new();
         println!("Fixing up function: {}", function.name);
         for instruction in function.instructions.iter() {
-            println!("Fixing up instruction: {:?}", instruction);
+            //   println!("Fixing up instruction: {:?}", instruction);
             match instruction {
                 Instruction::Mov(assembly_type, src, dest) => {
                     let new_src = self.fix_pseudo(src, assembly_type)?;
@@ -932,21 +1011,33 @@ impl X64CodeGenerator {
             AssemblyType::QuadWord | AssemblyType::Double => 8,
             AssemblyType::Byte => 1,
             AssemblyType::Word => 2,
+            _ => unreachable!(),
+        }
+    }
+
+    fn lookup_pseudo(&mut self, pseudo_name: &str, size: i32) -> i32 {
+        if let Some(offset) = self.pseudo_registers.get(pseudo_name) {
+            *offset
+        } else {
+            self.next_offset += size;
+            self.pseudo_registers
+                .insert(pseudo_name.to_string(), self.next_offset);
+            self.next_offset
         }
     }
     fn fix_pseudo(&mut self, operand: &Operand, assembly_type: &AssemblyType) -> Result<Operand> {
-        if let Operand::Pseudo(pseudo_name) = operand {
-            assert!(pseudo_name.contains('$'));
-            let offset = if let Some(offset) = self.pseudo_registers.get(pseudo_name) {
-                *offset
-            } else {
-                self.next_offset += Self::get_operand_size(assembly_type);
-                self.pseudo_registers
-                    .insert(pseudo_name.to_string(), self.next_offset);
-                self.next_offset
-            };
-            return Ok(Operand::Memory(Register::RBP, -offset));
-        }
-        Ok(operand.clone())
+        Ok(match operand {
+            Operand::Pseudo(pseudo_name) => {
+                assert!(pseudo_name.contains('$'));
+                let offset = self.lookup_pseudo(pseudo_name, Self::get_operand_size(assembly_type));
+                Operand::Memory(Register::RBP, -offset)
+            }
+            Operand::PseudoMem(pseudo_name, total_size, offset) => {
+                assert!(pseudo_name.contains('$'));
+                let stack_offset = self.lookup_pseudo(pseudo_name, *total_size as i32);
+                Operand::Memory(Register::RBP, -stack_offset + *offset as i32)
+            }
+            _ => operand.clone(),
+        })
     }
 }

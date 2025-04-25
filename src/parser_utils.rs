@@ -22,6 +22,33 @@ impl Parser {
             _ => false,
         }
     }
+    pub fn get_integer(value: &Value) -> Result<usize> {
+        match value {
+            Value::Int32(v) => Ok(*v as usize),
+            Value::Int64(v) => Ok(*v as usize),
+            Value::UInt32(v) => Ok(*v as usize),
+            Value::UInt64(v) => Ok(*v as usize),
+            _ => bail!("Expected integer, got {:?}", value),
+        }
+    }
+
+    // pub fn deref_pointer(value: &Value) -> Result<Value> {
+    //     assert!(value.is_pointer(), "Expected pointer, got {:?}", value);
+    //     let (name, stype) = value.as_variable().unwrap();
+    //     let ptype = Self::get_pointee_type(&stype).unwrap();
+
+    //     assert!(name.starts_with('*'));
+    //     let name = &name[1..];
+
+    //     Ok(Value::Variable(name.to_string(), ptype.clone()))
+    // }
+    // pub fn make_deref_pointer(value: &Value) -> Value {
+    //     let name = value.as_variable().unwrap().0.clone();
+    //     let name = format!("*{}", name);
+    //     let stype = Self::get_type(&value);
+    //     let ptype = Self::get_pointee_type(&stype).unwrap();
+    //     Value::Variable(name, SymbolType::Pointer(Box::new(ptype.clone())))
+    // }
 
     pub fn is_null_pointer_constant(value: &Value) -> bool {
         match value {

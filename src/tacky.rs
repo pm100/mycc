@@ -30,6 +30,8 @@ pub enum Instruction {
     GetAddress(Value, Value),
     Load(Value, Value),
     Store(Value, Value),
+    AddPtr(Value, Value, isize, Value),
+    CopyToOffset(Value, Value, usize),
 }
 #[derive(Debug, PartialEq)]
 
@@ -68,17 +70,41 @@ pub enum Value {
     UInt64(u64),
     Double(f64),
     Variable(String, SymbolType),
-    Dereference(Box<Value>),
+    // Dereference(Box<Value>),
 }
-
+#[derive(Debug, Clone, PartialEq)]
+pub enum PendingResult {
+    PlainValue(Value),
+    Dereference(Value),
+}
+impl PendingResult {
+    pub fn is_pointer(&self) -> bool {
+        match self {
+            PendingResult::PlainValue(v) => v.is_pointer() || v.is_array(),
+            PendingResult::Dereference(v) => v.is_pointer() || v.is_array(),
+        }
+    }
+    pub fn is_array(&self) -> bool {
+        match self {
+            PendingResult::PlainValue(v) => v.is_array(),
+            PendingResult::Dereference(v) => v.is_array(),
+        }
+    }
+}
 impl Value {
     pub fn is_pointer(&self) -> bool {
         match self {
             Value::Variable(_, SymbolType::Pointer(_)) => true,
-            Value::Dereference(v) => match v.as_ref() {
-                Value::Variable(_, SymbolType::Pointer(_)) => true,
-                _ => false,
-            },
+            // Value::Dereference(v) => match v.as_ref() {
+            //     Value::Variable(_, SymbolType::Pointer(_)) => true,
+            //     _ => false,
+            // },
+            _ => false,
+        }
+    }
+    pub fn is_array(&self) -> bool {
+        match self {
+            Value::Variable(_, SymbolType::Array(_, _)) => true,
             _ => false,
         }
     }
@@ -107,7 +133,7 @@ pub struct StaticVariable {
     pub stype: SymbolType,
     pub global: bool,
     pub external: bool,
-    pub init: StaticInit,
+    pub init: Vec<Value>,
 }
 impl Default for TackyProgram {
     fn default() -> Self {
@@ -126,31 +152,37 @@ impl TackyProgram {
     pub fn add_static_variable(
         &mut self,
         name: &str,
-        value: Option<Value>,
+        values: Vec<Value>,
         global: bool,
         external: bool,
         stype: &SymbolType,
     ) -> Option<StaticVariable> {
-        let init = match value {
-            Some(Value::Int32(v)) => StaticInit::InitI32(v),
-            Some(Value::Int64(v)) => StaticInit::InitI64(v),
-            Some(Value::UInt32(v)) => StaticInit::InitU32(v),
-            Some(Value::UInt64(v)) => StaticInit::InitU64(v),
-            Some(Value::Double(v)) => StaticInit::InitDouble(v),
+        // let mut init = values
+        //     .iter()
+        //     .map(|v| match v {
+        //         Value::Int32(v) => StaticInit::InitI32(*v),
+        //         Value::Int64(v) => StaticInit::InitI64(*v),
+        //         Value::UInt32(v) => StaticInit::InitU32(*v),
+        //         Value::UInt64(v) => StaticInit::InitU64(*v),
+        //         Value::Double(v) => StaticInit::InitDouble(*v),
 
-            None => StaticInit::InitNone,
-            _ => panic!(
-                "Invalid static variable type {:?} for {}={:?}",
-                stype, name, value
-            ),
-        };
+        //         // => StaticInit::InitNone,
+        //         _ => panic!(
+        //             "Invalid static variable type {:?} for {}={:?}",
+        //             stype, name, v
+        //         ),
+        //     })
+        //     .collect::<Vec<_>>();
+        // if init.is_empty() {
+        //     init.push(StaticInit::InitNone);
+        // }
 
         self.static_variables.insert(
             name.to_string(),
             StaticVariable {
                 name: name.to_string(),
                 stype: stype.clone(),
-                init,
+                init: values,
                 global,
                 external,
             },
@@ -185,6 +217,7 @@ impl TackyProgram {
                 SymbolType::Double => AssemblyType::QuadWord,
                 SymbolType::Function(_, _) => AssemblyType::QuadWord, // TODO
                 SymbolType::Pointer(_) => AssemblyType::QuadWord,
+                SymbolType::Array(_, _) => todo!(), // TODO
             },
             _ => todo!(), // Value::Dereference(v) => match v.as_ref() {
                           //     Value::Int32(_) => AssemblyType::LongWord,
@@ -219,7 +252,7 @@ impl TackyProgram {
                 static_variable.init,
                 static_variable.global,
                 static_variable.external,
-                static_variable.stype
+                static_variable.stype,
             );
         }
         for function in &self.functions {
@@ -286,6 +319,15 @@ impl TackyProgram {
                     }
                     Instruction::Store(src, dest) => {
                         println!("      Store {:?} {:?}", src, dest);
+                    }
+                    Instruction::AddPtr(src, dest, offset, result) => {
+                        println!(
+                            "      AddPtr {:?} {:?} {:?} {:?}",
+                            src, dest, offset, result
+                        );
+                    }
+                    Instruction::CopyToOffset(src, dest, offset) => {
+                        println!("      CopyToOffset {:?} {:?} {:?}", src, dest, offset);
                     }
                 }
             }
