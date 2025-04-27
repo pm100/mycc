@@ -67,7 +67,8 @@ impl X64BackEnd {
             SymbolType::Function(_, _) => AssemblyType::QuadWord, // TODO
             SymbolType::Array(stype, size) => {
                 let esize = Parser::get_size_of_stype(stype);
-                AssemblyType::ByteArray(esize * size, 16)
+                let align = X64CodeGenerator::calculate_alignment(stype);
+                AssemblyType::ByteArray(esize * size, align)
             }
         }
     }

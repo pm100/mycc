@@ -93,17 +93,23 @@ impl X64CodeGenerator {
         let hex = value.to_bits();
         format!("{:x}", hex)
     }
-    fn calculate_alignment(stype: &SymbolType) -> usize {
+    pub fn calculate_alignment(stype: &SymbolType) -> usize {
         match stype {
             SymbolType::Int32 | SymbolType::UInt32 => 4,
             SymbolType::Int64 | SymbolType::UInt64 | SymbolType::Pointer(_) => 8,
             SymbolType::Double => 16,
-            SymbolType::Array(_, _) => match Parser::get_inner_array_type(stype).unwrap() {
-                SymbolType::Int32 | SymbolType::UInt32 => 4,
-                SymbolType::Int64 | SymbolType::UInt64 | SymbolType::Pointer(_) => 8,
-                SymbolType::Double => 16,
-                _ => unreachable!(),
-            },
+            SymbolType::Array(_, _) => {
+                let size = Parser::get_total_object_size(stype).unwrap();
+                if size > 16 {
+                    return 16;
+                }
+                match Parser::get_inner_array_type(stype).unwrap() {
+                    SymbolType::Int32 | SymbolType::UInt32 => 4,
+                    SymbolType::Int64 | SymbolType::UInt64 | SymbolType::Pointer(_) => 8,
+                    SymbolType::Double => 16,
+                    _ => unreachable!(),
+                }
+            }
             _ => unreachable!(),
         }
     }
@@ -1015,26 +1021,40 @@ impl X64CodeGenerator {
         }
     }
 
-    fn lookup_pseudo(&mut self, pseudo_name: &str, size: i32) -> i32 {
+    fn lookup_pseudo(&mut self, pseudo_name: &str, size: i32, align: usize) -> i32 {
         if let Some(offset) = self.pseudo_registers.get(pseudo_name) {
             *offset
         } else {
-            self.next_offset += size;
+            let pad = align as i32 - (self.next_offset % align as i32);
+            self.next_offset += size + pad;
             self.pseudo_registers
                 .insert(pseudo_name.to_string(), self.next_offset);
             self.next_offset
         }
     }
+
+    fn assembly_type_alignment(assembly_type: &AssemblyType) -> usize {
+        match assembly_type {
+            AssemblyType::LongWord => 4,
+            AssemblyType::QuadWord => 8,
+            AssemblyType::Byte => 1,
+            AssemblyType::Word => 2,
+            AssemblyType::Double => 8,
+            AssemblyType::ByteArray(_, align) => *align,
+        }
+    }
     fn fix_pseudo(&mut self, operand: &Operand, assembly_type: &AssemblyType) -> Result<Operand> {
+        let align = Self::assembly_type_alignment(assembly_type);
         Ok(match operand {
             Operand::Pseudo(pseudo_name) => {
                 assert!(pseudo_name.contains('$'));
-                let offset = self.lookup_pseudo(pseudo_name, Self::get_operand_size(assembly_type));
+                let offset =
+                    self.lookup_pseudo(pseudo_name, Self::get_operand_size(assembly_type), align);
                 Operand::Memory(Register::RBP, -offset)
             }
             Operand::PseudoMem(pseudo_name, total_size, offset) => {
                 assert!(pseudo_name.contains('$'));
-                let stack_offset = self.lookup_pseudo(pseudo_name, *total_size as i32);
+                let stack_offset = self.lookup_pseudo(pseudo_name, *total_size as i32, align);
                 Operand::Memory(Register::RBP, -stack_offset + *offset as i32)
             }
             _ => operand.clone(),

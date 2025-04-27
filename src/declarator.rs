@@ -6,7 +6,7 @@ use crate::{
 use anyhow::{bail, Result};
 use enum_as_inner::EnumAsInner;
 #[derive(Debug, Clone)]
-pub struct Parameter {
+struct Parameter {
     pub stype: SymbolType,
     pub decl: Declarator,
 }
@@ -72,8 +72,12 @@ impl Parser {
                 let mut pnames = Vec::new();
                 let mut ptypes = Vec::new();
                 for param in params.iter() {
-                    let (name, ptype, _) = self.process_declarator(&param.decl, base_type)?;
+                    let (name, ptype, _) = self.process_declarator(&param.decl, &param.stype)?;
+                    if pnames.contains(&name) {
+                        bail!("Duplicate parameter name: {}", name);
+                    }
                     pnames.push(name);
+                    let ptype = Self::decay_arg(&ptype);
                     ptypes.push(ptype);
                 }
                 // let (ptype, pnames) = params
@@ -88,7 +92,13 @@ impl Parser {
             }
         }
     }
-
+    pub fn decay_arg(stype: &SymbolType) -> SymbolType {
+        match stype {
+            // SymbolType::Pointer(_) => stype.clone(),
+            SymbolType::Array(stype, _) => SymbolType::Pointer(stype.clone()),
+            _ => stype.clone(),
+        }
+    }
     pub fn parse_abstract_declarator(
         &mut self,
         base_type: &SymbolType,
@@ -146,7 +156,7 @@ impl Parser {
             }
             Suffix::Index(indexes) => {
                 let mut adecl = simp; //              let mut atype = new_type.clone();
-                for index in indexes.iter().rev() {
+                for index in indexes.iter() {
                     adecl = Declarator::Array(Box::new(adecl), *index);
                 }
                 adecl

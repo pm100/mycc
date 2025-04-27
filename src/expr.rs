@@ -203,10 +203,16 @@ impl Parser {
                         let ptype = &Self::get_type(&pointer);
                         let dest = self.make_temporary(&ptype);
                         let pointed_type = Self::get_pointee_type(&ptype)?;
+
+                        let elem_size = Self::get_total_object_size(&pointed_type)? as isize;
+                        println!(
+                            "pointer: {:?} pointed_type: {:?} elsize={}",
+                            pointer, pointed_type, elem_size
+                        );
                         let inst = Instruction::AddPtr(
                             pointer,
                             delta,
-                            Self::get_size_of_stype(&pointed_type) as isize,
+                            elem_size, //Self::get_size_of_stype(&pointed_type) as isize,
                             dest.clone(),
                         );
                         self.instruction(inst);
@@ -319,7 +325,7 @@ impl Parser {
             return Ok(self.convert_to(value, target_type, false)?);
         }
         if target_type.is_pointer() && Self::is_null_pointer_constant(value) {
-            return Ok(self.convert_to(value, target_type, false)?);
+            return Ok(Value::UInt64(0));
         }
         // if target_type.is_pointer() && value.is_pointer() {
         //     return Ok(self.convert_to(value, target_type, true)?);
@@ -352,11 +358,7 @@ impl Parser {
             SymbolType::Double => 8,
             SymbolType::Function(_, _) => 8,
             SymbolType::Pointer(_) => 8,
-            SymbolType::Array(t, size) => {
-                let elem_type = Self::get_inner_array_type(&symbol).unwrap();
-                let elem_size = Self::get_size_of_stype(&elem_type);
-                return elem_size * size;
-            }
+            SymbolType::Array(t, _) => Self::get_total_object_size(&t).unwrap(),
         }
     }
     fn get_common_pointer_type(a: &Value, b: &Value) -> Result<SymbolType> {
@@ -449,6 +451,9 @@ impl Parser {
                     match (&vtype, target_type) {
                         (SymbolType::Pointer(_), SymbolType::Pointer(_)) => {
                             if !explicit_cast {
+                                if Self::decay_arg(&vtype) == Self::decay_arg(target_type) {
+                                    return Ok(value.clone());
+                                }
                                 bail!("Cannot implicitly convert pointer t1 to pointer t2");
                             }
                             return Ok(value.clone());
@@ -839,20 +844,25 @@ impl Parser {
             let ptype = Self::get_type(&ptr);
             let stype = Self::get_pointee_type(&ptype)?;
             let dest = self.make_temporary(&ptype);
+            let elem_size = Self::get_total_object_size(&stype)? as isize;
+            println!(
+                "pointer: {:?} pointed_type: {:?} elsize={}",
+                ptr, stype, elem_size
+            );
             self.instruction(Instruction::AddPtr(
                 ptr.clone(),
                 index,
-                Self::get_size_of_stype(&stype) as isize,
+                elem_size, //Self::get_size_of_stype(&stype) as isize,
                 dest.clone(),
             ));
             print!("++++indexing dest =  {:?}", dest);
             primary_rv = if dest.is_pointer() {
                 let ptype = Self::get_pointee_type(&Self::get_type(&dest))?;
-                if ptype.is_array() {
+                if ptype.is_array() | ptype.is_pointer() {
                     do_deref = false;
                     Value::Variable(
                         dest.as_variable().unwrap().0.clone(),
-                        SymbolType::Pointer(Box::new(Self::get_array_type(&ptype)?)),
+                        SymbolType::Pointer(Box::new(Self::get_target_type(&ptype)?)),
                     )
                 } else {
                     dest
@@ -1178,6 +1188,17 @@ impl Parser {
                 | SymbolType::UInt64,
             ) => {
                 bail!("Cannot compare pointer to number")
+            }
+            (
+                BinaryOperator::Add | BinaryOperator::Subtract,
+                SymbolType::Double
+                | SymbolType::Int32
+                | SymbolType::Int64
+                | SymbolType::UInt32
+                | SymbolType::UInt64,
+                SymbolType::Pointer(_),
+            ) => {
+                bail!("Cannot add number to pointer")
             }
             (BinaryOperator::ShiftLeft | BinaryOperator::ShiftRight, SymbolType::Pointer(_), _) => {
                 bail!("Cannot shift pointer")

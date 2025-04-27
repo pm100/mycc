@@ -71,7 +71,13 @@ impl Parser {
             _ => bail!("Not an array"),
         }
     }
-
+    pub fn get_target_type(stype: &SymbolType) -> Result<SymbolType> {
+        match stype {
+            SymbolType::Pointer(t) => Ok(*t.clone()),
+            SymbolType::Array(t, _) => Ok(*t.clone()),
+            _ => bail!("Not a pointer or array type"),
+        }
+    }
     pub fn get_inner_array_type(stype: &SymbolType) -> Result<SymbolType> {
         let mut stype = stype;
         loop {
@@ -85,6 +91,18 @@ impl Parser {
                 }
                 _ => bail!("Not an array"),
             }
+        }
+    }
+    pub fn get_total_object_size(stype: &SymbolType) -> Result<usize> {
+        if stype.is_array() {
+            let dim = Self::get_array_size(stype)?;
+            println!("dim {}", dim);
+            let inner = Self::get_array_type(stype)?;
+            let size = Self::get_total_object_size(&inner)?;
+            return Ok(dim * size);
+        } else {
+            let size = Self::get_size_of_stype(stype);
+            return Ok(size);
         }
     }
     pub fn get_array_size(stype: &SymbolType) -> Result<usize> {

@@ -893,10 +893,11 @@ impl Parser {
             }
             _ => {
                 let val = self.do_rvalue_expression()?;
-                if Self::get_type(&val) != *dest_type {
-                    bail!("Type mismatch in initializer");
-                }
-                Ok(Initializer::SingleInit(val))
+                let conv = self.convert_by_assignment(&val, dest_type)?;
+                // if Self::get_type(&val) != *dest_type {
+                //     bail!("Type mismatch in initializer");
+                // }
+                Ok(Initializer::SingleInit(conv))
             }
         }
     }
@@ -1310,7 +1311,7 @@ impl Parser {
         if token == Token::Eof {
             self.eof_hit = true;
         }
-        println!("next_token {:?}", token);
+        //println!("next_token {:?}", token);
         Ok(token)
     }
     fn dump_var_map(&self) {
