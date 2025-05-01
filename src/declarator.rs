@@ -46,15 +46,12 @@ impl Parser {
         let base_type = specifiers.specified_type.clone().unwrap();
         let decl = self.parse_declarator()?;
         println!("declaration {:?}", decl);
-        let res = self.process_declarator(&decl, &base_type)?;
+        let res = Self::process_declarator(&decl, &base_type)?;
         println!("declaration {:?}", res);
-        //Ok((specifiers, name, stype, params))
-        // bail!("Expected identifier got {:?}", decl);
         Ok((specifiers, res.0, res.1, res.2))
     }
 
     fn process_declarator(
-        &mut self,
         decl: &Declarator,
         base_type: &SymbolType,
     ) -> Result<(String, SymbolType, Vec<String>)> {
@@ -62,11 +59,11 @@ impl Parser {
             Declarator::Identifier(name) => Ok((name.clone(), base_type.clone(), vec![])),
             Declarator::Pointer(pdecl) => {
                 let stype = SymbolType::Pointer(Box::new(base_type.clone()));
-                self.process_declarator(pdecl, &stype)
+                Self::process_declarator(pdecl, &stype)
             }
             Declarator::Array(pdecl, size) => {
                 let stype = SymbolType::Array(Box::new(base_type.clone()), *size);
-                self.process_declarator(pdecl, &stype)
+                Self::process_declarator(pdecl, &stype)
             }
             Declarator::Function(params, decl) => {
                 let unbox = *decl.clone();
@@ -79,7 +76,7 @@ impl Parser {
                 let mut pnames = Vec::new();
                 let mut ptypes = Vec::new();
                 for param in params.iter() {
-                    let (name, ptype, _) = self.process_declarator(&param.decl, &param.stype)?;
+                    let (name, ptype, _) = Self::process_declarator(&param.decl, &param.stype)?;
                     if pnames.contains(&name) {
                         bail!("Duplicate parameter name: {}", name);
                     }
@@ -87,13 +84,6 @@ impl Parser {
                     let ptype = Self::decay_arg(&ptype);
                     ptypes.push(ptype);
                 }
-                // let (ptype, pnames) = params
-                //     .iter()
-                //     .map(|p| {
-                //         let (name, ptype, _) = self.process_declarator(&p.decl, base_type)?;
-                //         (ptype, name)
-                //     })
-                //     .unzip();
                 let stype = SymbolType::Function(ptypes, Box::new(base_type.clone()));
                 Ok((s, stype, pnames))
             }
@@ -101,7 +91,6 @@ impl Parser {
     }
     pub fn decay_arg(stype: &SymbolType) -> SymbolType {
         match stype {
-            // SymbolType::Pointer(_) => stype.clone(),
             SymbolType::Array(stype, _) => SymbolType::Pointer(stype.clone()),
             _ => stype.clone(),
         }
@@ -169,18 +158,18 @@ impl Parser {
     }
 
     pub fn process_abstract_declarator(
-        &mut self,
+        //    &mut self,
         decl: &AbstractDeclarator,
         base_type: &SymbolType,
     ) -> Result<SymbolType> {
         match decl {
             AbstractDeclarator::Pointer(pdecl) => {
                 let stype = SymbolType::Pointer(Box::new(base_type.clone()));
-                self.process_abstract_declarator(pdecl, &stype)
+                Self::process_abstract_declarator(pdecl, &stype)
             }
             AbstractDeclarator::Array(pdecl, size) => {
                 let stype = SymbolType::Array(Box::new(base_type.clone()), *size);
-                self.process_abstract_declarator(pdecl, &stype)
+                Self::process_abstract_declarator(pdecl, &stype)
             }
             AbstractDeclarator::AbstractBase => Ok(base_type.clone()),
         }

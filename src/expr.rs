@@ -741,7 +741,7 @@ impl Parser {
                     base_type.clone()
                 } else {
                     let decl = self.parse_abstract_declarator()?;
-                    let abs = self.process_abstract_declarator(&decl, &base_type)?;
+                    let abs = Self::process_abstract_declarator(&decl, &base_type)?;
                     println!("cast abstract decl {:?}", abs);
 
                     abs

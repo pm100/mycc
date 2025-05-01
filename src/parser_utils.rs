@@ -6,21 +6,21 @@ use crate::{lexer::Token, parser::Parser, symbols::SymbolType, tacky::Value};
 
 impl Parser {
     pub fn is_arithmetic(stype: &SymbolType) -> bool {
-        match stype {
+        matches!(
+            stype,
             SymbolType::Int32
-            | SymbolType::Int64
-            | SymbolType::UInt32
-            | SymbolType::UInt64
-            | SymbolType::Double => true,
-            _ => false,
-        }
+                | SymbolType::Int64
+                | SymbolType::UInt32
+                | SymbolType::UInt64
+                | SymbolType::Double
+        )
     }
 
     pub fn is_integer(stype: &SymbolType) -> bool {
-        match stype {
-            SymbolType::Int32 | SymbolType::Int64 | SymbolType::UInt32 | SymbolType::UInt64 => true,
-            _ => false,
-        }
+        matches!(
+            stype,
+            SymbolType::Int32 | SymbolType::Int64 | SymbolType::UInt32 | SymbolType::UInt64
+        )
     }
     pub fn get_integer(value: &Value) -> Result<usize> {
         match value {
@@ -32,32 +32,11 @@ impl Parser {
         }
     }
 
-    // pub fn deref_pointer(value: &Value) -> Result<Value> {
-    //     assert!(value.is_pointer(), "Expected pointer, got {:?}", value);
-    //     let (name, stype) = value.as_variable().unwrap();
-    //     let ptype = Self::get_pointee_type(&stype).unwrap();
-
-    //     assert!(name.starts_with('*'));
-    //     let name = &name[1..];
-
-    //     Ok(Value::Variable(name.to_string(), ptype.clone()))
-    // }
-    // pub fn make_deref_pointer(value: &Value) -> Value {
-    //     let name = value.as_variable().unwrap().0.clone();
-    //     let name = format!("*{}", name);
-    //     let stype = Self::get_type(&value);
-    //     let ptype = Self::get_pointee_type(&stype).unwrap();
-    //     Value::Variable(name, SymbolType::Pointer(Box::new(ptype.clone())))
-    // }
-
     pub fn is_null_pointer_constant(value: &Value) -> bool {
-        match value {
-            Value::Int32(0) => true,
-            Value::Int64(0) => true,
-            Value::UInt32(0) => true,
-            Value::UInt64(0) => true,
-            _ => false,
-        }
+        matches!(
+            value,
+            Value::Int32(0) | Value::Int64(0) | Value::UInt32(0) | Value::UInt64(0)
+        )
     }
     pub(crate) fn expect(&mut self, token: Token) -> Result<Token> {
         let nt = self.next_token()?;

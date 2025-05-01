@@ -870,7 +870,6 @@ impl X64BackEnd {
                         assembly_type,
                     )
                 } else if symbol_type.is_array() {
-                    //let (stype, size) = symbol_type.as_array().unwrap();
                     let align = X64CodeGenerator::calculate_alignment(symbol_type);
                     let total_size = Parser::get_total_object_size(symbol_type).unwrap();
                     (

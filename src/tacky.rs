@@ -93,20 +93,10 @@ impl PendingResult {
 }
 impl Value {
     pub fn is_pointer(&self) -> bool {
-        match self {
-            Value::Variable(_, SymbolType::Pointer(_)) => true,
-            // Value::Dereference(v) => match v.as_ref() {
-            //     Value::Variable(_, SymbolType::Pointer(_)) => true,
-            //     _ => false,
-            // },
-            _ => false,
-        }
+        matches!(self, Value::Variable(_, SymbolType::Pointer(_)))
     }
     pub fn is_array(&self) -> bool {
-        match self {
-            Value::Variable(_, SymbolType::Array(_, _)) => true,
-            _ => false,
-        }
+        matches!(self, Value::Variable(_, SymbolType::Array(_, _)))
     }
 }
 #[derive(Debug)]

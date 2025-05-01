@@ -788,7 +788,7 @@ impl Parser {
 
     fn do_initializer(
         &mut self,
-        name: &String,
+        name: &str,
         dest_type: &SymbolType,
         is_auto: bool,
     ) -> Result<Vec<Value>> {
@@ -801,7 +801,7 @@ impl Parser {
                 let converted = self.convert_by_assignment(v, &dest_type.clone())?;
                 self.instruction(Instruction::Copy(
                     converted.clone(),
-                    Value::Variable(name.clone(), dest_type.clone()),
+                    Value::Variable(name.to_owned(), dest_type.clone()),
                 ));
                 vec![]
             }
@@ -826,13 +826,12 @@ impl Parser {
                 }
                 let values = Self::unwind_nested(Some(&init), dest_type)?;
                 let elem_type = Self::get_inner_array_type(dest_type)?;
-                // let size = Self::get_size_of_stype(&atype);
                 let mut offset = 0;
                 for v in &values {
                     let converted = self.convert_by_assignment(v, &elem_type)?;
                     self.instruction(Instruction::CopyToOffset(
                         converted.clone(),
-                        Value::Variable(name.clone(), dest_type.clone()),
+                        Value::Variable(name.to_owned(), dest_type.clone()),
                         offset,
                     ));
                     let size = Self::get_size_of_stype(&elem_type);
@@ -869,22 +868,6 @@ impl Parser {
         compound_init: Option<&Initializer>,
         stype: &SymbolType,
     ) -> Result<Vec<Value>> {
-        // int first_half_only[4][2][6] = {
-        //     {{1, 2, 3}},  // first_half_only[0][0][0-2]
-        //     {{4, 5, 6}}   // first_half_only[1][0][0-2]
-        // };
-
-        // CompoundInit(
-        //    [CompoundInit(
-        //          [CompoundInit([SingleInit(Int32(1)), SingleInit(Int32(2)), SingleInit(Int32(3))])
-        //     CompoundInit(
-        //          [CompoundInit([SingleInit(Int32(4)), SingleInit(Int32(5)), SingleInit(Int32(6))])
-        //     ])
-        // ])
-
-        // let (total_elements, el_type) = Self::get_array_count_and_type(stype)?;
-        //let result = Vec::with_capacity(total_elements);
-        // let mut result = vec![Value::Int32(0); total_elements];
         indent(&format!("unwind_nested {:?} {:?} ", compound_init, stype));
         match compound_init {
             Some(Initializer::SingleInit(v)) => Ok(vec![v.clone()]),
@@ -947,21 +930,6 @@ impl Parser {
                     if self.peek()? == Token::Comma {
                         self.next_token()?;
                     } else {
-                        // if values.len() > size {
-                        //     bail!("Too many initializers for array");
-                        // }
-                        // for i in values.len()..size {
-                        //     if nested.is_array() {
-                        //         let mut ci = Vec::new();
-                        //         let nested_size = Self::get_array_size(&nested)?;
-                        //         for i in 0..nested_size {
-                        //             ci.push(Initializer::SingleInit(Value::Int32(0)));
-                        //         }
-                        //         values.push(Initializer::CompoundInit(ci));
-                        //     } else {
-                        //         values.push(Initializer::SingleInit(Value::Int32(0)));
-                        //     }
-                        // }
                         break;
                     }
                 }
@@ -974,10 +942,7 @@ impl Parser {
             }
             _ => {
                 let val = self.do_rvalue_expression()?;
-                //let conv = self.convert_by_assignment(&val, dest_type)?;
-                // if Self::get_type(&val) != *dest_type {
-                //     bail!("Type mismatch in initializer");
-                // }
+
                 Ok(Initializer::SingleInit(val))
             }
         }
@@ -1427,7 +1392,6 @@ impl Parser {
         self.local_variables.get_mut(len - 1).unwrap()
     }
     pub(crate) fn peek(&mut self) -> Result<Token> {
-        
         //   println!("peek {:?}", token);
         self.peek_n(0)
     }
