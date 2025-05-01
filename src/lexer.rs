@@ -332,24 +332,24 @@ impl Lexer {
             if let Ok(val) = self.current_line[start..start + count].parse::<i128>() {
                 if val as f64 == fl {
                     self.current_pos += val.to_string().len() - 1;
-                    return MaybeNumber::Number(val);
+                    MaybeNumber::Number(val)
                 } else {
                     self.current_pos += count - 1;
-                    return MaybeNumber::Float(fl);
+                    MaybeNumber::Float(fl)
                 }
             } else {
                 self.current_pos += count - 1;
-                return MaybeNumber::Float(fl);
+                MaybeNumber::Float(fl)
             }
         } else {
-            return MaybeNumber::None;
+            MaybeNumber::None
         }
     }
     fn number(&mut self) -> Result<Token> {
         match self.try_parse_float() {
             MaybeNumber::None => bail!("Error: invalid number"),
             MaybeNumber::Float(f) => {
-                return Ok(Token::F64Constant(f));
+                Ok(Token::F64Constant(f))
             }
             MaybeNumber::Number(mut val) => {
                 // let start = self.current_pos - 1;

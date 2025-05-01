@@ -322,7 +322,7 @@ impl Parser {
             .iter()
             .zip(symbol.stype.into_function().unwrap().0.iter())
         {
-            let new_name = self.make_newname(&arg_name);
+            let new_name = self.make_newname(arg_name);
             new_names.push((new_name.clone(), arg_type.clone()));
             self.local_variables().insert(
                 arg_name.to_string(),
@@ -341,7 +341,7 @@ impl Parser {
                 explicit_external,
                 scope_pull: false,
             };
-            self.insert_symbol(&arg_name, symbol);
+            self.insert_symbol(arg_name, symbol);
         }
 
         self.tacky.add_function(
@@ -798,7 +798,7 @@ impl Parser {
         let vals = match (is_auto, &init) {
             (true, Initializer::SingleInit(v)) => {
                 // int x = 42;
-                let converted = self.convert_by_assignment(&v, &dest_type.clone())?;
+                let converted = self.convert_by_assignment(v, &dest_type.clone())?;
                 self.instruction(Instruction::Copy(
                     converted.clone(),
                     Value::Variable(name.clone(), dest_type.clone()),
@@ -810,10 +810,10 @@ impl Parser {
                 if v.is_variable() {
                     bail!("Static variable must be initialized to a constant");
                 }
-                let converted = if dest_type.is_pointer() && Self::is_null_pointer_constant(&v) {
+                let converted = if dest_type.is_pointer() && Self::is_null_pointer_constant(v) {
                     Value::UInt32(0)
                 } else {
-                    self.convert_by_assignment(&v, &dest_type)?
+                    self.convert_by_assignment(v, dest_type)?
                 };
                 vec![converted]
             }
@@ -1427,9 +1427,9 @@ impl Parser {
         self.local_variables.get_mut(len - 1).unwrap()
     }
     pub(crate) fn peek(&mut self) -> Result<Token> {
-        let token = self.peek_n(0);
+        
         //   println!("peek {:?}", token);
-        token
+        self.peek_n(0)
     }
 
     pub(crate) fn peek_n(&mut self, n: usize) -> Result<Token> {

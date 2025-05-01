@@ -37,6 +37,12 @@ pub struct StaticConstant {
     pub value: StaticInit,
 }
 
+impl Default for MoiraProgram {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MoiraProgram {
     pub fn new() -> Self {
         MoiraProgram {

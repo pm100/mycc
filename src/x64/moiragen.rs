@@ -655,7 +655,7 @@ impl X64BackEnd {
             if let Some(op) = op {
                 self.moira(Instruction::Mov(assembly_type.clone(), src1, dest.clone()));
                 self.moira(Instruction::Binary(op, assembly_type.clone(), src2, dest));
-                return Ok(());
+                Ok(())
             } else {
                 match binary_operator {
                     tacky::BinaryOperator::Equal
@@ -824,7 +824,7 @@ impl X64BackEnd {
                 strval.clone(),
                 StaticConstant {
                     name: const_label.clone(),
-                    value: tacky::StaticInit::InitDouble(value.clone()),
+                    value: tacky::StaticInit::InitDouble(value),
                     align: 16,
                 },
             );
@@ -869,23 +869,21 @@ impl X64BackEnd {
                         symbol_type.clone(),
                         assembly_type,
                     )
+                } else if symbol_type.is_array() {
+                    //let (stype, size) = symbol_type.as_array().unwrap();
+                    let align = X64CodeGenerator::calculate_alignment(symbol_type);
+                    let total_size = Parser::get_total_object_size(symbol_type).unwrap();
+                    (
+                        Operand::PseudoMem(register.clone(), total_size, 0, align),
+                        symbol_type.clone(),
+                        assembly_type,
+                    )
                 } else {
-                    if symbol_type.is_array() {
-                        //let (stype, size) = symbol_type.as_array().unwrap();
-                        let align = X64CodeGenerator::calculate_alignment(symbol_type);
-                        let total_size = Parser::get_total_object_size(symbol_type).unwrap();
-                        (
-                            Operand::PseudoMem(register.clone(), total_size, 0, align),
-                            symbol_type.clone(),
-                            assembly_type,
-                        )
-                    } else {
-                        (
-                            Operand::Pseudo(register.clone()),
-                            symbol_type.clone(),
-                            assembly_type,
-                        )
-                    }
+                    (
+                        Operand::Pseudo(register.clone()),
+                        symbol_type.clone(),
+                        assembly_type,
+                    )
                 }
             }
         }
@@ -897,7 +895,7 @@ impl BackEnd for X64BackEnd {
         let moira = self.generate_moira(tacky)?;
         moira.dump();
         let mut x64gen = X64CodeGenerator::new();
-        x64gen.generate_asm(&moira, output)?;
+        x64gen.generate_asm(moira, output)?;
         Ok(())
     }
 }

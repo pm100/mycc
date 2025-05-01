@@ -108,10 +108,10 @@ impl Parser {
 
             let inner = Self::get_array_type(stype)?;
             let size = Self::get_total_object_size(&inner)?;
-            return Ok(dim * size);
+            Ok(dim * size)
         } else {
             let size = Self::get_size_of_stype(stype);
-            return Ok(size);
+            Ok(size)
         }
     }
 
@@ -120,10 +120,10 @@ impl Parser {
             let dim = Self::get_array_size(stype)?;
             let inner = Self::get_array_type(stype)?;
             let (idim, stype) = Self::get_array_count_and_type(&inner)?;
-            return Ok((idim * dim, stype));
+            Ok((idim * dim, stype))
         } else {
             //let size = Self::get_size_of_stype(stype);
-            return Ok((1, stype.clone()));
+            Ok((1, stype.clone()))
         }
     }
     pub fn get_array_size(stype: &SymbolType) -> Result<usize> {

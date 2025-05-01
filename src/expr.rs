@@ -193,7 +193,7 @@ impl Parser {
                             let delta = self.convert_to(&delta, &SymbolType::Int64, true)?;
                             let delta = if op == BinaryOperator::Subtract {
                                 if let Value::Int64(v) = delta {
-                                    Value::Int64(v * -1)
+                                    Value::Int64(-v)
                                 } else {
                                     let new_delta = self.make_temporary(&SymbolType::Int64);
                                     self.instruction(Instruction::Unary(
@@ -207,46 +207,44 @@ impl Parser {
                                 delta
                             };
                             let ptype = &Self::get_type(&pointer);
-                            let dest = self.make_temporary(&ptype);
-                            let pointed_type = Self::get_pointee_type(&ptype)?;
+                            let dest = self.make_temporary(ptype);
+                            let pointed_type = Self::get_pointee_type(ptype)?;
 
                             let elem_size = Self::get_total_object_size(&pointed_type)? as isize;
                             let inst = Instruction::AddPtr(pointer, delta, elem_size, dest.clone());
                             self.instruction(inst);
                             dest
                         }
+                    } else if op == BinaryOperator::ShiftLeft || op == BinaryOperator::ShiftRight {
+                        let dest = self.make_temporary(&left_type.clone());
+                        self.instruction(Instruction::Binary(op, left_rv, right, dest.clone()));
+                        dest
                     } else {
-                        if op == BinaryOperator::ShiftLeft || op == BinaryOperator::ShiftRight {
-                            let dest = self.make_temporary(&left_type.clone());
-                            self.instruction(Instruction::Binary(op, left_rv, right, dest.clone()));
-                            dest
-                        } else {
-                            let common_type =
-                                if matches!(op, BinaryOperator::Equal | BinaryOperator::NotEqual)
-                                    && (left_rv.is_pointer() || right.is_pointer())
-                                {
-                                    Self::get_common_pointer_type(&left_rv, &right)
-                                } else {
-                                    Self::get_common_type(&left_type, &right_type)
-                                }?;
-                            let left = self.convert_to(&left_rv, &common_type, false)?;
-                            let right = self.convert_to(&right, &common_type, false)?;
-                            let dest_type = if op == BinaryOperator::Equal
-                                || op == BinaryOperator::NotEqual
-                                || op == BinaryOperator::LessThan
-                                || op == BinaryOperator::LessThanOrEqual
-                                || op == BinaryOperator::GreaterThan
-                                || op == BinaryOperator::GreaterThanOrEqual
+                        let common_type =
+                            if matches!(op, BinaryOperator::Equal | BinaryOperator::NotEqual)
+                                && (left_rv.is_pointer() || right.is_pointer())
                             {
-                                SymbolType::Int32
+                                Self::get_common_pointer_type(&left_rv, &right)
                             } else {
-                                common_type.clone()
-                            };
-                            let dest = self.make_temporary(&dest_type);
-                            let inst = Instruction::Binary(op, left, right, dest.clone());
-                            self.instruction(inst);
-                            dest
-                        }
+                                Self::get_common_type(&left_type, &right_type)
+                            }?;
+                        let left = self.convert_to(&left_rv, &common_type, false)?;
+                        let right = self.convert_to(&right, &common_type, false)?;
+                        let dest_type = if op == BinaryOperator::Equal
+                            || op == BinaryOperator::NotEqual
+                            || op == BinaryOperator::LessThan
+                            || op == BinaryOperator::LessThanOrEqual
+                            || op == BinaryOperator::GreaterThan
+                            || op == BinaryOperator::GreaterThanOrEqual
+                        {
+                            SymbolType::Int32
+                        } else {
+                            common_type.clone()
+                        };
+                        let dest = self.make_temporary(&dest_type);
+                        let inst = Instruction::Binary(op, left, right, dest.clone());
+                        self.instruction(inst);
+                        dest
                     }
                 }
             };
@@ -267,11 +265,11 @@ impl Parser {
         // evaluate (var op value) -> binval
         // store binval into var
 
-        let left_rv = self.make_rvalue(&left)?;
-        let right_rv = self.make_rvalue(&right)?;
+        let left_rv = self.make_rvalue(left)?;
+        let right_rv = self.make_rvalue(right)?;
         let left_type = Self::get_type(&left_rv);
         let right_type = Self::get_type(&right_rv);
-        self.check_binary_allowed(&op, &left_type, &right_type)?;
+        self.check_binary_allowed(op, &left_type, &right_type)?;
 
         let (left_conv, right_conv) =
             if *op == BinaryOperator::ShiftLeft || *op == BinaryOperator::ShiftRight {
@@ -292,7 +290,7 @@ impl Parser {
             binval.clone(),
         ));
 
-        let result = self.store_into_lvalue(&binval, &left)?;
+        let result = self.store_into_lvalue(&binval, left)?;
 
         // we need to make sure the the result is *not* an lvalue
 
@@ -314,7 +312,7 @@ impl Parser {
             return Ok(value.clone());
         }
         if Self::is_arithmetic(&vtype) && Self::is_arithmetic(target_type) {
-            return Ok(self.convert_to(value, target_type, false)?);
+            return self.convert_to(value, target_type, false);
         }
         if target_type.is_pointer() && Self::is_null_pointer_constant(value) {
             return Ok(Value::UInt64(0));
@@ -346,12 +344,12 @@ impl Parser {
             SymbolType::Double => 8,
             SymbolType::Function(_, _) => 8,
             SymbolType::Pointer(_) => 8,
-            SymbolType::Array(t, _) => Self::get_total_object_size(&t).unwrap(),
+            SymbolType::Array(t, _) => Self::get_total_object_size(t).unwrap(),
         }
     }
     fn get_common_pointer_type(a: &Value, b: &Value) -> Result<SymbolType> {
-        let atype = Self::get_type(&a);
-        let btype = Self::get_type(&b);
+        let atype = Self::get_type(a);
+        let btype = Self::get_type(b);
         if atype == btype {
             return Ok(atype.clone());
         }
@@ -428,14 +426,14 @@ impl Parser {
                     Value::UInt64(0) | Value::Int64(0) | Value::Int32(0) | Value::UInt32(0),
                     SymbolType::Pointer(_),
                 ) => {
-                    let dest = self.make_temporary(&target_type);
+                    let dest = self.make_temporary(target_type);
                     self.instruction(Instruction::Copy(Value::Int64(0), dest.clone()));
                     return Ok(dest.clone());
                 }
 
                 // variables
                 _ => {
-                    let dest = self.make_temporary(&target_type);
+                    let dest = self.make_temporary(target_type);
                     match (&vtype, target_type) {
                         (SymbolType::Pointer(_), SymbolType::Pointer(_)) => {
                             if !explicit_cast {
@@ -551,7 +549,7 @@ impl Parser {
         match dest {
             PendingResult::Dereference(var) => {
                 // dereference the pointer
-                let ptype = Self::get_type(&var);
+                let ptype = Self::get_type(var);
                 let stype = Self::get_pointee_type(&ptype)?;
                 let converted = self.convert_by_assignment(value, &stype.clone())?;
                 self.instruction(Instruction::Store(converted.clone(), var.clone()));
@@ -560,14 +558,12 @@ impl Parser {
             PendingResult::PlainValue(var) => {
                 if let Value::Variable(name, stype) = var {
                     if !name.contains('$') {
-                        let lookup = self.lookup_symbol(&name);
+                        let lookup = self.lookup_symbol(name);
                         if lookup.is_none() {
                             bail!("Variable {} not declared", name);
                         }
-                    } else {
-                        if !self.is_lvalue(&var) {
-                            bail!("Not lvalue VVVV{:?}", dest);
-                        }
+                    } else if !self.is_lvalue(var) {
+                        bail!("Not lvalue VVVV{:?}", dest);
                     }
                     let converted = self.convert_by_assignment(value, &stype.clone())?;
                     self.instruction(Instruction::Copy(converted.clone(), var.clone()));
@@ -579,14 +575,14 @@ impl Parser {
         }
     }
     fn array_to_pointer(&mut self, value: &Value) -> Result<Value> {
-        let vtype = Self::get_type(&value);
+        let vtype = Self::get_type(value);
         println!("array_to_pointer {:?} {:?}", value, vtype);
         if let SymbolType::Array(stype, _size) = vtype {
             let dest = self.make_temporary(&SymbolType::Pointer(Box::new(*stype)));
             self.instruction(Instruction::GetAddress(value.clone(), dest.clone()));
-            return Ok(dest);
+            Ok(dest)
         } else {
-            return Ok(value.clone());
+            Ok(value.clone())
         }
     }
     fn make_rvalue(&mut self, value: &PendingResult) -> Result<Value> {
@@ -594,7 +590,7 @@ impl Parser {
         let ret = match &value {
             PendingResult::Dereference(var) => {
                 assert!(var.is_pointer(), "Expected pointer, got {:?}", var);
-                let ptype = Self::get_type(&var);
+                let ptype = Self::get_type(var);
                 let stype = Self::get_pointee_type(&ptype)?;
                 let deref_dest = match stype {
                     SymbolType::Array(t, _) => {
@@ -705,11 +701,11 @@ impl Parser {
                 match &source {
                     PendingResult::Dereference(v) => PendingResult::PlainValue(v.clone()),
                     PendingResult::PlainValue(v) => {
-                        if !self.is_lvalue(&v) {
+                        if !self.is_lvalue(v) {
                             bail!("not lvalue {:?}", v);
                         }
                         let ret_dest =
-                            self.make_temporary(&SymbolType::Pointer(Box::new(Self::get_type(&v))));
+                            self.make_temporary(&SymbolType::Pointer(Box::new(Self::get_type(v))));
                         self.instruction(Instruction::GetAddress(v.clone(), ret_dest.clone()));
                         PendingResult::PlainValue(ret_dest)
                     }
@@ -775,7 +771,7 @@ impl Parser {
         let index = self.do_expression(0)?;
         let index_rv = self.make_rvalue(&index)?;
 
-        let ptr_rv = self.make_rvalue(&primary)?;
+        let ptr_rv = self.make_rvalue(primary)?;
 
         // we have a pointer and an index, lets get them the right way round
 
@@ -863,9 +859,9 @@ impl Parser {
                 update.clone(),
             ));
             self.store_into_lvalue(&update, &primary)?;
-            return Ok(PendingResult::PlainValue(ret_dest));
+            Ok(PendingResult::PlainValue(ret_dest))
         } else {
-            return Ok(primary);
+            Ok(primary)
         }
     }
     fn do_primary(&mut self) -> Result<PendingResult> {

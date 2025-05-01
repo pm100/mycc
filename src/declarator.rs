@@ -145,14 +145,14 @@ impl Parser {
             let token = self.peek()?;
             if token == Token::LeftBracket {
                 let arr_decl = self.parse_abs_suffix(&decl)?;
-                return Ok(arr_decl);
+                Ok(arr_decl)
             } else {
-                return Ok(decl);
+                Ok(decl)
             }
         } else {
             let decl = AbstractDeclarator::AbstractBase;
             let arr_decl = self.parse_abs_suffix(&decl)?;
-            return Ok(arr_decl);
+            Ok(arr_decl)
         }
     }
     fn parse_abs_suffix(&mut self, base_type: &AbstractDeclarator) -> Result<AbstractDeclarator> {
@@ -162,7 +162,7 @@ impl Parser {
         let arr_decl = AbstractDeclarator::Array(Box::new(base_type.clone()), index);
         self.expect(Token::RightBracket)?;
         if self.peek()? == Token::LeftBracket {
-            return Ok(self.parse_abs_suffix(&arr_decl)?);
+            return self.parse_abs_suffix(&arr_decl);
         }
 
         Ok(arr_decl)
@@ -229,7 +229,7 @@ impl Parser {
         match self.peek()? {
             Token::Identifier(id) => {
                 self.next_token()?;
-                return Ok(Declarator::Identifier(id));
+                Ok(Declarator::Identifier(id))
             }
             Token::LeftParen => {
                 self.next_token()?;
