@@ -1,6 +1,6 @@
 use crate::parser::Parser;
-use crate::symbols::{self, SymbolType};
-use crate::x64::moira::{Function, MoiraProgram, StaticConstant};
+use crate::symbols::SymbolType;
+use crate::x64::moira::{Function, MoiraProgram};
 
 //use crate::codegen::MoiraCompiler;
 use crate::tacky::{StaticInit, Value};
@@ -100,7 +100,7 @@ impl X64CodeGenerator {
             SymbolType::Double => 16,
             SymbolType::Array(_, _) => {
                 let size = Parser::get_total_object_size(stype).unwrap();
-                if size > 16 {
+                if size >= 16 {
                     return 16;
                 }
                 match Parser::get_inner_array_type(stype).unwrap() {
@@ -156,11 +156,8 @@ impl X64CodeGenerator {
                         writeln!(writer, " dq {}", 0)?
                     }
                     SymbolType::Array(_, _) => {
-                        let size = Parser::get_array_size(&var.stype)?;
-                        let etype = Parser::get_inner_array_type(&var.stype)?;
-                        let size = size / Parser::get_size_of_stype(&etype);
-                        //let align = Self::calculate_alignment(etype);
-                        for i in 0..size {
+                        let (size, etype) = Parser::get_array_count_and_type(&var.stype)?;
+                        for _i in 0..size {
                             match etype {
                                 SymbolType::Int32 | SymbolType::UInt32 => {
                                     writeln!(writer, " dd {}", 0)?
@@ -468,7 +465,6 @@ impl X64CodeGenerator {
                     AssemblyType::Word => "WORD",
                     AssemblyType::Double => "",
                     AssemblyType::ByteArray(_, _) => "",
-                    _ => todo!(),
                 };
 
                 format!(
@@ -489,7 +485,7 @@ impl X64CodeGenerator {
                 };
                 format!("{} [{}]", qual, data)
             }
-            Operand::PseudoMem(data, size, offset) => {
+            Operand::PseudoMem(data, _size, _offset, _align) => {
                 let qual = match assembly_type {
                     AssemblyType::LongWord => "DWORD",
                     AssemblyType::QuadWord => "QWORD",
@@ -567,6 +563,22 @@ impl X64CodeGenerator {
             _ => unreachable!(),
         }
     }
+
+    fn get_assembly_type_from_operand(operand: &Operand) -> AssemblyType {
+        match operand {
+            Operand::Register(_) => AssemblyType::QuadWord,
+            Operand::ImmediateI32(_) => AssemblyType::LongWord,
+            Operand::ImmediateI64(_) => AssemblyType::QuadWord,
+            Operand::ImmediateU32(_) => AssemblyType::LongWord,
+            Operand::ImmediateU64(_) => AssemblyType::QuadWord,
+            Operand::Memory(_, _) => AssemblyType::QuadWord,
+            Operand::Data(_) => AssemblyType::QuadWord,
+            Operand::PseudoMem(_, size, _, align) => AssemblyType::ByteArray(*size, *align),
+            Operand::Indexed(_, _, _) => AssemblyType::QuadWord,
+            Operand::Pseudo(_) => AssemblyType::QuadWord,
+            // _ => unreachable!(),
+        }
+    }
     fn fixup_pass(&mut self, function: &Function) -> Result<Vec<Instruction>> {
         self.next_offset = 0;
         self.pseudo_registers.clear();
@@ -576,8 +588,9 @@ impl X64CodeGenerator {
             //   println!("Fixing up instruction: {:?}", instruction);
             match instruction {
                 Instruction::Mov(assembly_type, src, dest) => {
+                    let dest_assembly_type = Self::get_assembly_type_from_operand(dest);
                     let new_src = self.fix_pseudo(src, assembly_type)?;
-                    let new_dest = self.fix_pseudo(dest, assembly_type)?;
+                    let new_dest = self.fix_pseudo(dest, &dest_assembly_type)?;
                     let new_src = self.fix_long_immediate(&new_src, &mut new_instructions);
                     if Self::is_memory(&new_src) && Self::is_memory(&new_dest) {
                         let scratch = Self::get_scratch_register1(assembly_type);
@@ -651,7 +664,8 @@ impl X64CodeGenerator {
                                     new_dest,
                                 ));
                             } else {
-                                new_instructions.push(Instruction::Mov(
+                                new_instructions.push(Instruction::Binary(
+                                    op.clone(),
                                     assembly_type.clone(),
                                     new_src,
                                     new_dest,
@@ -1025,8 +1039,13 @@ impl X64CodeGenerator {
         if let Some(offset) = self.pseudo_registers.get(pseudo_name) {
             *offset
         } else {
-            let pad = align as i32 - (self.next_offset % align as i32);
+            let pad = align as i32 - ((self.next_offset + size) % align as i32);
+            let old_off = self.next_offset;
             self.next_offset += size + pad;
+            println!(
+                "Allocating pseudo register {} at offset {} (align={}, pad={} old-off={}",
+                pseudo_name, self.next_offset, align, pad, old_off
+            );
             self.pseudo_registers
                 .insert(pseudo_name.to_string(), self.next_offset);
             self.next_offset
@@ -1044,17 +1063,23 @@ impl X64CodeGenerator {
         }
     }
     fn fix_pseudo(&mut self, operand: &Operand, assembly_type: &AssemblyType) -> Result<Operand> {
-        let align = Self::assembly_type_alignment(assembly_type);
+        //  let align = Self::assembly_type_alignment(assembly_type);
+
         Ok(match operand {
             Operand::Pseudo(pseudo_name) => {
                 assert!(pseudo_name.contains('$'));
+                let align = Self::assembly_type_alignment(assembly_type);
                 let offset =
                     self.lookup_pseudo(pseudo_name, Self::get_operand_size(assembly_type), align);
                 Operand::Memory(Register::RBP, -offset)
             }
-            Operand::PseudoMem(pseudo_name, total_size, offset) => {
+            Operand::PseudoMem(pseudo_name, total_size, offset, align) => {
+                println!(
+                    "Fixing pseudo operand: {:?} assembly_type: {:?} align: {}",
+                    operand, assembly_type, align
+                );
                 assert!(pseudo_name.contains('$'));
-                let stack_offset = self.lookup_pseudo(pseudo_name, *total_size as i32, align);
+                let stack_offset = self.lookup_pseudo(pseudo_name, *total_size as i32, *align);
                 Operand::Memory(Register::RBP, -stack_offset + *offset as i32)
             }
             _ => operand.clone(),

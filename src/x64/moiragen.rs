@@ -65,8 +65,8 @@ impl X64BackEnd {
             SymbolType::Double => AssemblyType::Double,
             SymbolType::Pointer(_) => AssemblyType::QuadWord,
             SymbolType::Function(_, _) => AssemblyType::QuadWord, // TODO
-            SymbolType::Array(stype, size) => {
-                let esize = Parser::get_size_of_stype(stype);
+            SymbolType::Array(atype, size) => {
+                let esize = Parser::get_size_of_stype(atype);
                 let align = X64CodeGenerator::calculate_alignment(stype);
                 AssemblyType::ByteArray(esize * size, align)
             }
@@ -140,7 +140,7 @@ impl X64BackEnd {
         format!("{}_{:04}", label, self.instruction_counter)
     }
     fn gen_instruction(&mut self, instruction: &crate::tacky::Instruction) -> Result<()> {
-        //  println!("gen_instruction: {:?}", instruction);
+        println!("Tacky: {:?}", instruction);
         match instruction {
             tacky::Instruction::Return(value) => {
                 let (value, _stype, assembly_type) = self.get_value(value);
@@ -573,7 +573,7 @@ impl X64BackEnd {
                             dest.clone(),
                         ));
                     }
-                    Operand::Data(v) | Operand::Pseudo(v) => {
+                    Operand::Data(_) | Operand::Pseudo(_) => {
                         if *scal == 1 || *scal == 2 || *scal == 4 || *scal == 8 {
                             self.moira(Instruction::Mov(
                                 AssemblyType::QuadWord,
@@ -618,8 +618,8 @@ impl X64BackEnd {
             tacky::Instruction::CopyToOffset(src, dest, offset) => {
                 let (src, _src_stype, src_assembly_type) = self.get_value(src);
                 let (dest, _dest_stype, _) = self.get_value(dest);
-                let (name, size, _) = dest.as_pseudo_mem().unwrap();
-                let pm = Operand::PseudoMem(name.clone(), *size, *offset);
+                let (name, size, _, align) = dest.as_pseudo_mem().unwrap();
+                let pm = Operand::PseudoMem(name.clone(), *size, *offset, *align);
                 self.moira(Instruction::Mov(src_assembly_type, src, pm));
             }
         }
@@ -691,7 +691,7 @@ impl X64BackEnd {
                         self.moira(Instruction::SetCC(cc, dest));
                         self.moira(Instruction::Label(exit_label.clone()));
                     }
-                    __ => {
+                    _ => {
                         unreachable!();
                     }
                 }
@@ -871,10 +871,11 @@ impl X64BackEnd {
                     )
                 } else {
                     if symbol_type.is_array() {
-                        let (stype, size) = symbol_type.as_array().unwrap();
-                        let total_size = Parser::get_size_of_stype(&*stype) * size;
+                        //let (stype, size) = symbol_type.as_array().unwrap();
+                        let align = X64CodeGenerator::calculate_alignment(symbol_type);
+                        let total_size = Parser::get_total_object_size(symbol_type).unwrap();
                         (
-                            Operand::PseudoMem(register.clone(), total_size, 0),
+                            Operand::PseudoMem(register.clone(), total_size, 0, align),
                             symbol_type.clone(),
                             assembly_type,
                         )
@@ -886,9 +887,6 @@ impl X64BackEnd {
                         )
                     }
                 }
-            }
-            _ => {
-                panic!("Invalid value type {:?}", value);
             }
         }
     }

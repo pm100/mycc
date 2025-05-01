@@ -59,6 +59,7 @@ impl MoiraProgram {
 
     pub(crate) fn add_instruction(&mut self, instruction: Instruction) {
         //  if let Instruction::Mov(a, o1, o2) = instruction {}
+        println!("           {:?}", instruction);
         self.functions[self.current_function]
             .instructions
             .push(instruction);

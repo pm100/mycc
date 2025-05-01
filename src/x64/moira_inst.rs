@@ -66,7 +66,7 @@ pub enum Operand {
     Pseudo(String),
     Memory(Register, i32),
     Data(String),
-    PseudoMem(String, usize, usize),
+    PseudoMem(String, usize, usize, usize), // name, size, offset, alignment
     Indexed(Register, Register, usize),
 }
 #[derive(Debug, Clone)]

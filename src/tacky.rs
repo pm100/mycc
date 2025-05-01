@@ -219,14 +219,6 @@ impl TackyProgram {
                 SymbolType::Pointer(_) => AssemblyType::QuadWord,
                 SymbolType::Array(_, _) => todo!(), // TODO
             },
-            _ => todo!(), // Value::Dereference(v) => match v.as_ref() {
-                          //     Value::Int32(_) => AssemblyType::LongWord,
-                          //     Value::Int64(_) => AssemblyType::QuadWord,
-                          //     Value::UInt32(_) => AssemblyType::LongWord,
-                          //     Value::UInt64(_) => AssemblyType::QuadWord,
-                          //     Value::Double(_) => AssemblyType::QuadWord,
-                          //     _ => panic!("Invalid dereference type {:?}", v),
-                          // },
         }
     }
     pub(crate) fn add_instruction(&mut self, instruction: Instruction) {

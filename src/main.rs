@@ -10,15 +10,15 @@ pub mod tacky;
 pub mod x64;
 
 use anyhow::Result;
+use clap::Parser;
 use codegen::BackEnd;
 use log::{info, LevelFilter};
 use simplelog::{CombinedLogger, Config, WriteLogger};
 use std::env;
 use std::fs::File;
-use x64::moiragen::X64BackEnd;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use clap::Parser;
+use x64::moiragen::X64BackEnd;
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]

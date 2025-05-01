@@ -28,7 +28,7 @@ impl Parser {
             Value::Int64(v) => Ok(*v as usize),
             Value::UInt32(v) => Ok(*v as usize),
             Value::UInt64(v) => Ok(*v as usize),
-            _ => bail!("Expected integer, got {:?}", value),
+            _ => bail!("Expected integerxxx, got {:?}", value),
         }
     }
 

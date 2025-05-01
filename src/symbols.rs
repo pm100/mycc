@@ -71,6 +71,15 @@ impl Parser {
             _ => bail!("Not an array"),
         }
     }
+
+    pub fn get_inner_type(stype: &SymbolType) -> Result<SymbolType> {
+        match stype {
+            SymbolType::Pointer(t) => Ok(*t.clone()),
+            SymbolType::Array(t, _) => Ok(*t.clone()),
+            SymbolType::Function(_, t) => Ok(*t.clone()),
+            _ => bail!("Not a pointer or array type"),
+        }
+    }
     pub fn get_target_type(stype: &SymbolType) -> Result<SymbolType> {
         match stype {
             SymbolType::Pointer(t) => Ok(*t.clone()),
@@ -83,7 +92,7 @@ impl Parser {
         loop {
             match stype {
                 SymbolType::Array(t, _) => {
-                    if let SymbolType::Array(t2, _) = &**t {
+                    if let SymbolType::Array(_, _) = &**t {
                         stype = t;
                     } else {
                         return Ok(*t.clone());
@@ -96,13 +105,25 @@ impl Parser {
     pub fn get_total_object_size(stype: &SymbolType) -> Result<usize> {
         if stype.is_array() {
             let dim = Self::get_array_size(stype)?;
-            println!("dim {}", dim);
+
             let inner = Self::get_array_type(stype)?;
             let size = Self::get_total_object_size(&inner)?;
             return Ok(dim * size);
         } else {
             let size = Self::get_size_of_stype(stype);
             return Ok(size);
+        }
+    }
+
+    pub fn get_array_count_and_type(stype: &SymbolType) -> Result<(usize, SymbolType)> {
+        if stype.is_array() {
+            let dim = Self::get_array_size(stype)?;
+            let inner = Self::get_array_type(stype)?;
+            let (idim, stype) = Self::get_array_count_and_type(&inner)?;
+            return Ok((idim * dim, stype));
+        } else {
+            //let size = Self::get_size_of_stype(stype);
+            return Ok((1, stype.clone()));
         }
     }
     pub fn get_array_size(stype: &SymbolType) -> Result<usize> {

@@ -1,14 +1,14 @@
+use crate::declarator::indent;
 use anyhow::{bail, Result};
 use backtrace::{Backtrace, BacktraceFrame, BacktraceSymbol};
 use enum_as_inner::EnumAsInner;
-
 use std::{
     collections::{HashMap, VecDeque},
-    mem::offset_of,
     path::{Path, PathBuf},
 };
 
 use crate::{
+    declarator::INDENT,
     expect,
     lexer::{Lexer, Token},
     symbols::{Extern, Specifiers, Symbol, SymbolLinkage, SymbolState, SymbolType, VariableName},
@@ -184,7 +184,6 @@ impl Parser {
 
             (false, false, true) => SymbolLinkage::External,
         };
-        self.current_function_name = name.to_string();
 
         let token = self.peek()?;
 
@@ -313,6 +312,7 @@ impl Parser {
         if !body_allowed {
             bail!("Function {} definition not allowed here", name);
         }
+        self.current_function_name = name.to_string();
         let mut new_names = Vec::new();
         self.local_variables.clear();
         self.local_variables.push(HashMap::new());
@@ -538,7 +538,12 @@ impl Parser {
                 bail!("Variable {} already declared as external function", name);
             }
             if symbol.state == SymbolState::Defined && top && !explicit_external {
-                bail!("Variable {} already defined {:?}", name, symbol);
+                if symbol.stype != symbol_type {
+                    bail!("Variable {} already defined with different type", name);
+                }
+                if init {
+                    bail!("Variable {} already defined {:?}", name, symbol);
+                }
             }
             if symbol.linkage != linkage && top && symbol.linkage != SymbolLinkage::Internal {
                 bail!("Variable {} linkage mismatch", name);
@@ -787,7 +792,7 @@ impl Parser {
         dest_type: &SymbolType,
         is_auto: bool,
     ) -> Result<Vec<Value>> {
-        let init = self.parse_initializer(dest_type)?;
+        let init = self.parse_initializer()?;
         // simple initializer or compound
         // assign via static or auto
         let vals = match (is_auto, &init) {
@@ -819,7 +824,7 @@ impl Parser {
                 if !dest_type.is_array() {
                     bail!("Compound initializer not allowed here")
                 }
-                let values = Self::unwind_nested(&init);
+                let values = Self::unwind_nested(Some(&init), dest_type)?;
                 let elem_type = Self::get_inner_array_type(dest_type)?;
                 // let size = Self::get_size_of_stype(&atype);
                 let mut offset = 0;
@@ -841,46 +846,122 @@ impl Parser {
                 if !dest_type.is_array() {
                     bail!("Compound initializer not allowed here")
                 }
-                let values = Self::unwind_nested(&init);
+                let elem_type = Self::get_inner_array_type(dest_type)?;
+                let init_values = Self::unwind_nested(Some(&init), dest_type)?;
+                let mut values = Vec::new();
+                for v in init_values {
+                    let converted = if dest_type.is_pointer() && Self::is_null_pointer_constant(&v)
+                    {
+                        Value::UInt32(0)
+                    } else {
+                        self.convert_by_assignment(&v, &elem_type)?
+                    };
+                    values.push(converted);
+                }
+                // let size = Self::get_size_of_stype(&atype);
+
                 values
             }
         };
         Ok(vals)
     }
-    fn unwind_nested(compound_init: &Initializer) -> Vec<Value> {
+    fn unwind_nested(
+        compound_init: Option<&Initializer>,
+        stype: &SymbolType,
+    ) -> Result<Vec<Value>> {
+        // int first_half_only[4][2][6] = {
+        //     {{1, 2, 3}},  // first_half_only[0][0][0-2]
+        //     {{4, 5, 6}}   // first_half_only[1][0][0-2]
+        // };
+
+        // CompoundInit(
+        //    [CompoundInit(
+        //          [CompoundInit([SingleInit(Int32(1)), SingleInit(Int32(2)), SingleInit(Int32(3))])
+        //     CompoundInit(
+        //          [CompoundInit([SingleInit(Int32(4)), SingleInit(Int32(5)), SingleInit(Int32(6))])
+        //     ])
+        // ])
+
+        // let (total_elements, el_type) = Self::get_array_count_and_type(stype)?;
+        //let result = Vec::with_capacity(total_elements);
+        // let mut result = vec![Value::Int32(0); total_elements];
+        indent(&format!("unwind_nested {:?} {:?} ", compound_init, stype));
         match compound_init {
-            Initializer::SingleInit(v) => vec![v.clone()],
-            Initializer::CompoundInit(v) => {
+            Some(Initializer::SingleInit(v)) => Ok(vec![v.clone()]),
+            Some(Initializer::CompoundInit(v)) => {
                 let mut result = Vec::new();
+                let inner = Self::get_inner_type(stype).unwrap();
+                let mut this_array_size = Self::get_array_size(stype).unwrap();
+                indent(&format!(
+                    "unwinding arr size {} v.len{} ",
+                    this_array_size,
+                    v.len()
+                ));
                 for init in v {
-                    result.extend(Self::unwind_nested(init));
+                    if this_array_size == 0 {
+                        bail!("Array size mismatch")
+                    }
+                    this_array_size -= 1;
+                    indent(&format!("unwind this size {}", this_array_size));
+                    unsafe { INDENT += 1 };
+                    result.extend(Self::unwind_nested(Some(init), &inner)?);
+                    unsafe { INDENT -= 1 };
                 }
-                result
+                for i in 0..this_array_size {
+                    indent(&format!("padding 0 to unwind {:?}", i));
+                    unsafe { INDENT += 1 };
+
+                    result.extend(Self::unwind_nested(None, &inner)?);
+                    unsafe { INDENT = 1 };
+                }
+
+                Ok(result)
+            }
+            None => {
+                if stype.is_array() {
+                    let mut result = Vec::new();
+                    let inner = Self::get_inner_type(stype).unwrap();
+                    let this_array_size = Self::get_array_size(stype).unwrap();
+                    indent(&format!("unwind this size {}", this_array_size));
+                    for _ in 0..this_array_size {
+                        unsafe { INDENT += 1 };
+
+                        result.extend(Self::unwind_nested(None, &inner)?);
+                        unsafe { INDENT -= 1 };
+                    }
+                    Ok(result)
+                } else {
+                    Ok(vec![Value::Int32(0)])
+                }
             }
         }
     }
-    fn parse_initializer(&mut self, dest_type: &SymbolType) -> Result<Initializer> {
+    fn parse_initializer(&mut self) -> Result<Initializer> {
         let token = self.peek()?;
         match token {
             Token::LeftBrace => {
                 self.next_token()?;
                 let mut values = Vec::new();
                 while self.peek()? != Token::RightBrace {
-                    if !dest_type.is_array() {
-                        bail!("Compound initializer not allowed here")
-                    }
-                    let nested = Self::get_array_type(dest_type)?;
-                    let size = Self::get_array_size(dest_type)?;
-                    values.push(self.parse_initializer(&nested)?);
+                    values.push(self.parse_initializer()?);
                     if self.peek()? == Token::Comma {
                         self.next_token()?;
                     } else {
-                        if values.len() > size {
-                            bail!("Too many initializers for array");
-                        }
-                        for i in values.len()..size {
-                            values.push(Initializer::SingleInit(Value::Int32(0)));
-                        }
+                        // if values.len() > size {
+                        //     bail!("Too many initializers for array");
+                        // }
+                        // for i in values.len()..size {
+                        //     if nested.is_array() {
+                        //         let mut ci = Vec::new();
+                        //         let nested_size = Self::get_array_size(&nested)?;
+                        //         for i in 0..nested_size {
+                        //             ci.push(Initializer::SingleInit(Value::Int32(0)));
+                        //         }
+                        //         values.push(Initializer::CompoundInit(ci));
+                        //     } else {
+                        //         values.push(Initializer::SingleInit(Value::Int32(0)));
+                        //     }
+                        // }
                         break;
                     }
                 }
@@ -893,11 +974,11 @@ impl Parser {
             }
             _ => {
                 let val = self.do_rvalue_expression()?;
-                let conv = self.convert_by_assignment(&val, dest_type)?;
+                //let conv = self.convert_by_assignment(&val, dest_type)?;
                 // if Self::get_type(&val) != *dest_type {
                 //     bail!("Type mismatch in initializer");
                 // }
-                Ok(Initializer::SingleInit(conv))
+                Ok(Initializer::SingleInit(val))
             }
         }
     }
@@ -1311,7 +1392,7 @@ impl Parser {
         if token == Token::Eof {
             self.eof_hit = true;
         }
-        //println!("next_token {:?}", token);
+        // println!("next_token {:?}", token);
         Ok(token)
     }
     fn dump_var_map(&self) {
@@ -1347,7 +1428,7 @@ impl Parser {
     }
     pub(crate) fn peek(&mut self) -> Result<Token> {
         let token = self.peek_n(0);
-        // println!("peek {:?}", token);
+        //   println!("peek {:?}", token);
         token
     }
 

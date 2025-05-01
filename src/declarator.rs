@@ -10,12 +10,12 @@ struct Parameter {
     pub stype: SymbolType,
     pub decl: Declarator,
 }
-fn indent(str: &str) {
+pub fn indent(str: &str) {
     //let msg = format!("{:>width$}", str, width=INDENT as usize);
     let pad = unsafe { format!("{empty:>width$}", empty = "", width = INDENT * 4) };
     println!("{}{}", pad, str);
 }
-static mut INDENT: usize = 0;
+pub static mut INDENT: usize = 0;
 enum Suffix {
     ParamList(Vec<Parameter>),
     Index(Vec<usize>),
@@ -27,6 +27,13 @@ enum Declarator {
     Pointer(Box<Declarator>),
     Array(Box<Declarator>, usize),
     Function(Vec<Parameter>, Box<Declarator>),
+}
+
+#[derive(Debug, Clone, EnumAsInner)]
+pub enum AbstractDeclarator {
+    Pointer(Box<AbstractDeclarator>),
+    Array(Box<AbstractDeclarator>, usize),
+    AbstractBase,
 }
 impl Parser {
     pub fn parse_declaration(&mut self) -> Result<(Specifiers, String, SymbolType, Vec<String>)> {
@@ -101,29 +108,82 @@ impl Parser {
     }
     pub fn parse_abstract_declarator(
         &mut self,
-        base_type: &SymbolType,
-    ) -> Result<(SymbolType, Vec<String>)> {
-        if self.peek()? == Token::Multiply {
+        //base_type: &SymbolType,
+    ) -> Result<AbstractDeclarator> {
+        indent("parse_abstract_declarator");
+        unsafe { INDENT += 1 };
+        let decl = if self.peek()? == Token::Multiply {
+            // * followed by optionally another absdecl
             self.next_token()?;
-            let (pstype, pargs) = self.parse_abstract_declarator(base_type)?;
-            let stype = SymbolType::Pointer(Box::new(pstype));
-            Ok((stype, pargs))
+
+            let token = self.peek()?;
+            let inner = if token == Token::LeftParen
+                || token == Token::Multiply
+                || token == Token::LeftBracket
+            {
+                self.parse_abstract_declarator()?
+            } else {
+                AbstractDeclarator::AbstractBase
+            };
+            AbstractDeclarator::Pointer(Box::new(inner))
         } else {
-            if self.peek()? == Token::RightParen {
-                self.next_token()?;
-                return Ok((base_type.clone(), vec![]));
-            }
-            return self.parse_direct_abstract_declarator(base_type);
-        }
+            self.parse_direct_abstract_declarator()?
+        };
+        indent(&format!("parse_abstract_declarator {:?}", decl));
+        unsafe { INDENT += 1 };
+        Ok(decl)
     }
     fn parse_direct_abstract_declarator(
         &mut self,
+        //base_type: &SymbolType,
+    ) -> Result<AbstractDeclarator> {
+        let token = self.peek()?;
+        if token == Token::LeftParen {
+            self.next_token()?;
+            let decl = self.parse_abstract_declarator()?;
+            self.expect(Token::RightParen)?;
+            let token = self.peek()?;
+            if token == Token::LeftBracket {
+                let arr_decl = self.parse_abs_suffix(&decl)?;
+                return Ok(arr_decl);
+            } else {
+                return Ok(decl);
+            }
+        } else {
+            let decl = AbstractDeclarator::AbstractBase;
+            let arr_decl = self.parse_abs_suffix(&decl)?;
+            return Ok(arr_decl);
+        }
+    }
+    fn parse_abs_suffix(&mut self, base_type: &AbstractDeclarator) -> Result<AbstractDeclarator> {
+        self.next_token()?;
+        let index = self.do_rvalue_expression()?;
+        let index = Self::get_integer(&index)?;
+        let arr_decl = AbstractDeclarator::Array(Box::new(base_type.clone()), index);
+        self.expect(Token::RightBracket)?;
+        if self.peek()? == Token::LeftBracket {
+            return Ok(self.parse_abs_suffix(&arr_decl)?);
+        }
+
+        Ok(arr_decl)
+    }
+
+    pub fn process_abstract_declarator(
+        &mut self,
+        decl: &AbstractDeclarator,
         base_type: &SymbolType,
-    ) -> Result<(SymbolType, Vec<String>)> {
-        self.expect(Token::LeftParen)?;
-        let (stype, params) = self.parse_abstract_declarator(base_type)?;
-        self.expect(Token::RightParen)?;
-        Ok((stype, params))
+    ) -> Result<SymbolType> {
+        match decl {
+            AbstractDeclarator::Pointer(pdecl) => {
+                let stype = SymbolType::Pointer(Box::new(base_type.clone()));
+                self.process_abstract_declarator(pdecl, &stype)
+            }
+            AbstractDeclarator::Array(pdecl, size) => {
+                let stype = SymbolType::Array(Box::new(base_type.clone()), *size);
+                self.process_abstract_declarator(pdecl, &stype)
+            }
+            AbstractDeclarator::AbstractBase => Ok(base_type.clone()),
+        }
     }
     fn parse_declarator(&mut self) -> Result<Declarator> {
         unsafe { INDENT += 1 };
