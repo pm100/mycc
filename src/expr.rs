@@ -189,31 +189,31 @@ impl Parser {
                             } else {
                                 (right, left_rv)
                             };
+                            self.do_pointer_arithmetic(&op, &pointer, &delta)?
+                            // let delta = self.convert_to(&delta, &SymbolType::Int64, true)?;
+                            // let delta = if op == BinaryOperator::Subtract {
+                            //     if let Value::Int64(v) = delta {
+                            //         Value::Int64(-v)
+                            //     } else {
+                            //         let new_delta = self.make_temporary(&SymbolType::Int64);
+                            //         self.instruction(Instruction::Unary(
+                            //             UnaryOperator::Negate,
+                            //             delta.clone(),
+                            //             new_delta.clone(),
+                            //         ));
+                            //         new_delta
+                            //     }
+                            // } else {
+                            //     delta
+                            // };
+                            // let ptype = &Self::get_type(&pointer);
+                            // let dest = self.make_temporary(ptype);
+                            // let pointed_type = Self::get_pointee_type(ptype)?;
 
-                            let delta = self.convert_to(&delta, &SymbolType::Int64, true)?;
-                            let delta = if op == BinaryOperator::Subtract {
-                                if let Value::Int64(v) = delta {
-                                    Value::Int64(-v)
-                                } else {
-                                    let new_delta = self.make_temporary(&SymbolType::Int64);
-                                    self.instruction(Instruction::Unary(
-                                        UnaryOperator::Negate,
-                                        delta.clone(),
-                                        new_delta.clone(),
-                                    ));
-                                    new_delta
-                                }
-                            } else {
-                                delta
-                            };
-                            let ptype = &Self::get_type(&pointer);
-                            let dest = self.make_temporary(ptype);
-                            let pointed_type = Self::get_pointee_type(ptype)?;
-
-                            let elem_size = Self::get_total_object_size(&pointed_type)? as isize;
-                            let inst = Instruction::AddPtr(pointer, delta, elem_size, dest.clone());
-                            self.instruction(inst);
-                            dest
+                            // let elem_size = Self::get_total_object_size(&pointed_type)? as isize;
+                            // let inst = Instruction::AddPtr(pointer, delta, elem_size, dest.clone());
+                            // self.instruction(inst);
+                            //dest
                         }
                     } else if op == BinaryOperator::ShiftLeft || op == BinaryOperator::ShiftRight {
                         let dest = self.make_temporary(&left_type.clone());
@@ -252,7 +252,46 @@ impl Parser {
         }
         Ok(left)
     }
+    fn do_pointer_arithmetic(
+        &mut self,
+        op: &BinaryOperator,
+        pointer: &Value,
+        delta: &Value,
+    ) -> Result<Value> {
+        assert!(matches!(op, BinaryOperator::Add | BinaryOperator::Subtract));
+        assert!(pointer.is_pointer());
+        let delta = if *op == BinaryOperator::Subtract {
+            match delta {
+                Value::Int64(v) => Value::Int64(-v),
+                Value::Int32(v) => Value::Int64(-v as i64),
+                Value::UInt64(v) => Value::Int64(-(*v as i64)),
+                Value::UInt32(v) => Value::Int64(-(*v as i64)),
+                _ => {
+                    let delta = self.convert_to(delta, &SymbolType::Int64, true)?;
 
+                    let new_delta = self.make_temporary(&SymbolType::Int64);
+                    self.instruction(Instruction::Unary(
+                        UnaryOperator::Negate,
+                        delta.clone(),
+                        new_delta.clone(),
+                    ));
+                    new_delta
+                }
+            }
+        } else {
+            self.convert_to(delta, &SymbolType::Int64, true)?
+        };
+        assert!(Self::get_type(&delta) == SymbolType::Int64);
+        let size = Self::get_total_object_size(&Self::get_pointee_type(&Self::get_type(pointer))?)?;
+        let update = self.make_temporary(&Self::get_type(pointer));
+        self.instruction(Instruction::AddPtr(
+            pointer.clone(),
+            delta.clone(),
+            size as isize,
+            update.clone(),
+        ));
+        Ok(update)
+    }
     // x op= y
     fn process_compound(
         &mut self,
@@ -271,26 +310,30 @@ impl Parser {
         let right_type = Self::get_type(&right_rv);
         self.check_binary_allowed(op, &left_type, &right_type)?;
 
-        let (left_conv, right_conv) =
-            if *op == BinaryOperator::ShiftLeft || *op == BinaryOperator::ShiftRight {
-                (left_rv.clone(), right_rv.clone())
-            } else {
-                let common_type = Self::get_common_type(&left_type.clone(), &right_type)?;
-                let left_conv = self.convert_to(&left_rv, &common_type, false)?;
-                let right_conv = self.convert_to(&right_rv, &common_type, false)?;
-                (left_conv, right_conv)
-            };
-        let left_conv_type = Self::get_type(&left_conv);
-        let binval = self.make_temporary(&left_conv_type);
+        let update = if left_rv.is_pointer() {
+            self.do_pointer_arithmetic(op, &left_rv, &right_rv)?
+        } else {
+            let (left_conv, right_conv) =
+                if *op == BinaryOperator::ShiftLeft || *op == BinaryOperator::ShiftRight {
+                    (left_rv.clone(), right_rv.clone())
+                } else {
+                    let common_type = Self::get_common_type(&left_type.clone(), &right_type)?;
+                    let left_conv = self.convert_to(&left_rv, &common_type, false)?;
+                    let right_conv = self.convert_to(&right_rv, &common_type, false)?;
+                    (left_conv, right_conv)
+                };
+            let left_conv_type = Self::get_type(&left_conv);
+            let binval = self.make_temporary(&left_conv_type);
 
-        self.instruction(Instruction::Binary(
-            op.clone(),
-            left_conv.clone(),
-            right_conv.clone(),
-            binval.clone(),
-        ));
-
-        let result = self.store_into_lvalue(&binval, left)?;
+            self.instruction(Instruction::Binary(
+                op.clone(),
+                left_conv.clone(),
+                right_conv.clone(),
+                binval.clone(),
+            ));
+            binval
+        };
+        let result = self.store_into_lvalue(&update, left)?;
 
         // we need to make sure the the result is *not* an lvalue
 
@@ -646,14 +689,18 @@ impl Parser {
                     SymbolType::Pointer(_) => Value::Int64(1),
                     _ => bail!("Cannot use ++ or -- on {:?}", source),
                 };
-
-                let update = self.make_temporary(&Self::get_type(&source_rv));
-                self.instruction(Instruction::Binary(
-                    op,
-                    source_rv.clone(),
-                    inc_val,
-                    update.clone(),
-                ));
+                let update = if source_rv.is_pointer() {
+                    self.do_pointer_arithmetic(&op, &source_rv, &inc_val)?
+                } else {
+                    let update = self.make_temporary(&Self::get_type(&source_rv));
+                    self.instruction(Instruction::Binary(
+                        op,
+                        source_rv.clone(),
+                        inc_val,
+                        update.clone(),
+                    ));
+                    update
+                };
                 self.store_into_lvalue(&update, &source)?;
                 return Ok(PendingResult::PlainValue(update));
             }
@@ -814,55 +861,69 @@ impl Parser {
 
     fn do_postfix(&mut self) -> Result<PendingResult> {
         /*
-        // noT correct syntax for this yet
-        <postfix-exp> ::= <primary-exp> { "[" <exp> "] } ["++"|"--"]
+
+        <postfix-exp> ::= <primary-exp> {postfixop}
+        <postfixop> = "++" | "--" | "[" <exp> "]"
         */
-        let primary = self.do_primary()?;
+        let mut primary = self.do_primary()?;
+        loop {
+            let token = self.peek()?;
+            match token {
+                Token::LeftBracket => primary = self.process_index(&primary)?,
+                Token::PlusPlus | Token::MinusMinus => {
+                    primary = self.do_post_dec_inc(&primary)?;
+                }
+                _ => {
+                    break;
+                }
+            }
+        }
+        Ok(primary)
+    }
 
-        let primary = self.process_index(&primary)?;
+    // handle postfix ++ and --
+    fn do_post_dec_inc(&mut self, primary: &PendingResult) -> Result<PendingResult> {
+        let token = self.next_token()?;
 
-        // postfix ++ and --
-        let token = self.peek()?;
-        if token == Token::PlusPlus || token == Token::MinusMinus {
-            self.next_token()?;
+        let op = if token == Token::PlusPlus {
+            BinaryOperator::Add
+        } else {
+            BinaryOperator::Subtract
+        };
 
-            let op = if token == Token::PlusPlus {
-                BinaryOperator::Add
-            } else {
-                BinaryOperator::Subtract
-            };
+        let primary_rv = self.make_rvalue(primary)?;
 
-            let primary_rv = self.make_rvalue(&primary)?;
+        // the value we will return
 
-            // the value we will return
+        let ret_dest = self.make_temporary(&Self::get_type(&primary_rv));
+        self.instruction(Instruction::Copy(primary_rv.clone(), ret_dest.clone()));
 
-            let ret_dest = self.make_temporary(&Self::get_type(&primary_rv));
-            self.instruction(Instruction::Copy(primary_rv.clone(), ret_dest.clone()));
+        let inc_val = match Self::get_type(&primary_rv) {
+            SymbolType::Int32 => Value::Int32(1),
+            SymbolType::UInt32 => Value::UInt32(1),
+            SymbolType::Int64 => Value::Int64(1),
+            SymbolType::UInt64 => Value::UInt64(1),
+            SymbolType::Double => Value::Double(1.0),
+            SymbolType::Pointer(_) => Value::UInt64(1),
+            _ => bail!("Cannot use ++ or -- on {:?}", primary_rv),
+        };
+        //   self.check_binary_allowed(&op, &Self::get_type(&primary_rv), &Self::get_type(&inc_val))?;
+        // the value we will store into the lvalue
 
-            // the value we will store into the lvalue
-
+        let update = if primary_rv.is_pointer() {
+            self.do_pointer_arithmetic(&op, &primary_rv, &inc_val)?
+        } else {
             let update = self.make_temporary(&Self::get_type(&primary_rv));
-
-            let inc_val = match Self::get_type(&primary_rv) {
-                SymbolType::Int32 => Value::Int32(1),
-                SymbolType::UInt32 => Value::UInt32(1),
-                SymbolType::Int64 => Value::Int64(1),
-                SymbolType::UInt64 => Value::UInt64(1),
-                SymbolType::Double => Value::Double(1.0),
-                SymbolType::Pointer(_) => Value::Int64(1),
-                _ => bail!("Cannot use ++ or -- on {:?}", primary_rv),
-            };
             self.instruction(Instruction::Binary(
                 op,
                 primary_rv.clone(),
                 inc_val,
                 update.clone(),
             ));
-            self.store_into_lvalue(&update, &primary)?;
-            Ok(PendingResult::PlainValue(ret_dest))
-        } else {
-            Ok(primary)
-        }
+            update
+        };
+        self.store_into_lvalue(&update, primary)?;
+        Ok(PendingResult::PlainValue(ret_dest))
     }
     fn do_primary(&mut self) -> Result<PendingResult> {
         /*
@@ -1112,11 +1173,14 @@ impl Parser {
             (
                 BinaryOperator::Add | BinaryOperator::Subtract,
                 SymbolType::Double,
-                // | SymbolType::Int32
-                // | SymbolType::Int64
-                // | SymbolType::UInt32
-                // | SymbolType::UInt64,
                 SymbolType::Pointer(_),
+            ) => {
+                bail!("Cannot add number to pointer")
+            }
+            (
+                BinaryOperator::Add | BinaryOperator::Subtract,
+                SymbolType::Pointer(_),
+                SymbolType::Double,
             ) => {
                 bail!("Cannot add number to pointer")
             }
