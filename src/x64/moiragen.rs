@@ -1,13 +1,16 @@
 use std::{cmp::max, path::Path};
 
 use crate::{
-    codegen::BackEnd, parser::Parser, symbols::SymbolType, tacky::TackyProgram,
+    codegen::BackEnd,
+    parser::Parser,
+    symbols::SymbolType,
+    tacky::{StaticConstant, StaticVariable, TackyProgram},
     x64::nasmgen::X64CodeGenerator,
 };
 use anyhow::Result;
 
 use super::{
-    moira::{MoiraProgram, StaticConstant, StaticVariable},
+    moira::MoiraProgram,
     moira_inst::{
         AssemblyType, BinaryOperator, CondCode, Instruction, Operand, Register, UnaryOperator,
     },
@@ -38,13 +41,12 @@ impl X64BackEnd {
 
     fn generate_moira(&mut self, program: &TackyProgram) -> Result<&MoiraProgram> {
         for data in program.static_variables.values() {
-            self.moira.top_vars.push(StaticVariable {
-                name: data.name.clone(),
-                global: data.global,
-                values: data.init.clone(),
-                external: data.external,
-                stype: data.stype.clone(),
-            });
+            self.moira.top_vars.push(data.clone());
+        }
+        for sc in program.static_constants.values() {
+            self.moira
+                .static_constants
+                .insert(sc.name.clone(), sc.clone());
         }
         for function in &program.functions {
             self.moira.gen_function(function)?;
@@ -64,6 +66,9 @@ impl X64BackEnd {
             SymbolType::UInt64 => AssemblyType::QuadWord,
             SymbolType::Double => AssemblyType::Double,
             SymbolType::Pointer(_) => AssemblyType::QuadWord,
+            SymbolType::Char => AssemblyType::Byte,
+            SymbolType::SChar => AssemblyType::Byte,
+            SymbolType::UChar => AssemblyType::Byte,
             SymbolType::Function(_, _) => AssemblyType::QuadWord, // TODO
             SymbolType::Array(atype, size) => {
                 let esize = Parser::get_size_of_stype(atype);
@@ -133,6 +138,7 @@ impl X64BackEnd {
         match assembly_type {
             AssemblyType::LongWord => Operand::ImmediateI32(value),
             AssemblyType::QuadWord => Operand::ImmediateI64(value as i64),
+            AssemblyType::Byte => Operand::ImmediateI8(value as i8),
             _ => todo!(),
         }
     }
@@ -215,7 +221,7 @@ impl X64BackEnd {
                             ));
                             self.moira(Instruction::Mov(
                                 assembly_type1.clone(),
-                                Self::generate_signed_immediate(assembly_type1.clone(), 0),
+                                Self::generate_signed_immediate(assembly_type2.clone(), 0),
                                 value2.clone(),
                             ));
                             self.moira(Instruction::SetCC(CondCode::E, value2.clone()));
@@ -351,22 +357,20 @@ impl X64BackEnd {
             }
 
             tacky::Instruction::SignExtend(src, dest) => {
-                let (src, _src_stype, _) = self.get_value(src);
-                let (dest, _dest_stype, _) = self.get_value(dest);
-                self.moira(Instruction::SignExtend(src, dest));
+                let (src, _src_stype, src_at) = self.get_value(src);
+                let (dest, _dest_stype, dest_at) = self.get_value(dest);
+                self.moira(Instruction::MovSignExtend(src_at, dest_at, src, dest));
             }
             tacky::Instruction::ZeroExtend(src, dest) => {
-                let (src, _src_stype, _assembly_type) = self.get_value(src);
-                let (dest, _dest_stype, _) = self.get_value(dest);
+                let (src, _src_stype, src_at) = self.get_value(src);
+                let (dest, _dest_stype, dest_at) = self.get_value(dest);
 
-                // if dest is register = not yet
-                let scratch = Operand::Register(Register::R11);
-                self.moira(Instruction::Mov(
-                    AssemblyType::LongWord,
+                self.moira(Instruction::MovZeroExtend(
+                    src_at,
+                    dest_at,
                     src,
-                    scratch.clone(),
+                    dest.clone(),
                 ));
-                self.moira(Instruction::Mov(AssemblyType::QuadWord, scratch, dest));
             }
             tacky::Instruction::Truncate(src, dest) => {
                 let (src, _src_stype, _) = self.get_value(src);
@@ -376,13 +380,39 @@ impl X64BackEnd {
             tacky::Instruction::DoubleToInt(src, dest) => {
                 let (src, _src_stype, _) = self.get_value(src);
                 let (dest, _dest_stype, dest_assembly_type) = self.get_value(dest);
-                //   self.moira(Instruction::Mov(AssemblyType::QuadWord, src, dest));
-                self.moira(Instruction::Cvttsdsi(dest_assembly_type, src, dest.clone()));
-                // todo!();
+                if dest_assembly_type == AssemblyType::Byte {
+                    let scratch = X64CodeGenerator::get_scratch_register1(&AssemblyType::QuadWord);
+                    self.moira(Instruction::Cvttsdsi(
+                        AssemblyType::QuadWord,
+                        src,
+                        scratch.clone(),
+                    ));
+                    self.moira(Instruction::Mov(
+                        AssemblyType::QuadWord,
+                        scratch.clone(),
+                        dest.clone(),
+                    ));
+                } else {
+                    self.moira(Instruction::Cvttsdsi(dest_assembly_type, src, dest.clone()));
+                }
             }
             tacky::Instruction::IntToDouble(src, dest) => {
-                let (src, _src_stype, src_assembly_type) = self.get_value(src);
-                let (dest, _dest_stype, _) = self.get_value(dest);
+                let (src, src_stype, src_assembly_type) = self.get_value(src);
+                let (dest, _dest_stype, dest_at) = self.get_value(dest);
+                let (src, src_assembly_type) =
+                    if matches!(src_stype, SymbolType::Char | SymbolType::SChar) {
+                        let scratch =
+                            X64CodeGenerator::get_scratch_register1(&AssemblyType::QuadWord);
+                        self.moira(Instruction::MovSignExtend(
+                            AssemblyType::Byte,
+                            AssemblyType::QuadWord,
+                            src,
+                            scratch.clone(),
+                        ));
+                        (scratch, AssemblyType::QuadWord)
+                    } else {
+                        (src, src_assembly_type)
+                    };
                 self.moira(Instruction::Cvtsi2sd(src_assembly_type, src, dest));
             }
             tacky::Instruction::DoubleToUInt(src, dest) => {
@@ -625,6 +655,18 @@ impl X64BackEnd {
         }
         Ok(())
     }
+    fn are_same_type(stype1: &SymbolType, stype2: &SymbolType) -> bool {
+        if stype1 == stype2 {
+            return true;
+        }
+        if stype1.is_char() && stype2.is_s_char() {
+            return true;
+        }
+        if stype1.is_s_char() && stype2.is_char() {
+            return true;
+        }
+        return false;
+    }
     fn gen_binary(
         &mut self,
         binary_operator: &tacky::BinaryOperator,
@@ -634,7 +676,7 @@ impl X64BackEnd {
     ) -> Result<()> {
         let (src1, src1_stype, assembly_type) = self.get_value(src1);
         let (src2, src2_stype, _) = self.get_value(src2);
-        let (dest, dest_stype, _) = self.get_value(dest);
+        let (dest, dest_stype, dest_at) = self.get_value(dest);
         if src1_stype == SymbolType::Double {
             assert!(src2_stype == SymbolType::Double);
             if binary_operator == &tacky::BinaryOperator::Add
@@ -721,8 +763,8 @@ impl X64BackEnd {
                     && op != BinaryOperator::ShiftRightArith
                     && op != BinaryOperator::ShiftRight
                 {
-                    assert!(src1_stype == src2_stype);
-                    assert!(src1_stype == dest_stype);
+                    assert!(Self::are_same_type(&src1_stype, &src2_stype));
+                    assert!(Self::are_same_type(&src1_stype, &dest_stype));
                 }
                 self.moira(Instruction::Mov(assembly_type.clone(), src1, dest.clone()));
                 self.moira(Instruction::Binary(op, assembly_type.clone(), src2, dest));
@@ -775,11 +817,11 @@ impl X64BackEnd {
                     | tacky::BinaryOperator::LessThanOrEqual
                     | tacky::BinaryOperator::GreaterThan
                     | tacky::BinaryOperator::GreaterThanOrEqual => {
-                        assert!(src1_stype == src2_stype);
+                        assert!(Self::are_same_type(&src1_stype, &src2_stype));
                         self.moira(Instruction::Cmp(assembly_type.clone(), src2, src1));
                         self.moira(Instruction::Mov(
-                            assembly_type.clone(),
-                            Self::generate_signed_immediate(assembly_type.clone(), 0),
+                            dest_at.clone(),
+                            Self::generate_signed_immediate(dest_at.clone(), 0),
                             dest.clone(),
                         ));
                         let cc = if Parser::is_signed(&src1_stype) {
@@ -824,8 +866,11 @@ impl X64BackEnd {
                 strval.clone(),
                 StaticConstant {
                     name: const_label.clone(),
-                    value: tacky::StaticInit::InitDouble(value),
+                    init: vec![tacky::StaticInit::InitDouble(value)],
                     align: 16,
+                    global: false,
+                    external: false,
+                    stype: SymbolType::Double,
                 },
             );
             const_label
@@ -854,6 +899,17 @@ impl X64BackEnd {
                 SymbolType::Int64,
                 AssemblyType::QuadWord,
             ),
+            tacky::Value::Char(value) => (
+                Operand::ImmediateI8(*value as i8),
+                SymbolType::Char,
+                AssemblyType::Byte,
+            ),
+            tacky::Value::String(_) => todo!(),
+            tacky::Value::UChar(value) => (
+                Operand::ImmediateU8(*value as u8),
+                SymbolType::UChar,
+                AssemblyType::Byte,
+            ),
             tacky::Value::Double(value) => {
                 let const_label = self.make_static_constant(*value);
                 let dest = Operand::Data(const_label);
@@ -863,7 +919,9 @@ impl X64BackEnd {
 
             tacky::Value::Variable(register, symbol_type) => {
                 let assembly_type = Self::get_assembly_type(symbol_type);
-                if self.moira.top_vars.iter().any(|v| v.name == *register) {
+                if self.moira.top_vars.iter().any(|v| v.name == *register)
+                    || self.moira.static_constants.contains_key(register)
+                {
                     (
                         Operand::Data(register.clone()),
                         symbol_type.clone(),

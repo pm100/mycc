@@ -84,6 +84,9 @@ impl Parser {
                     let ptype = Self::decay_arg(&ptype);
                     ptypes.push(ptype);
                 }
+                if base_type.is_array() {
+                    bail!("Function type cannot be an array type");
+                }
                 let stype = SymbolType::Function(ptypes, Box::new(base_type.clone()));
                 Ok((s, stype, pnames))
             }
@@ -314,61 +317,88 @@ impl Parser {
             is_external: false,
             specified_type: None, // SymbolType::Int,
         };
-        let mut long_count = 0;
-        let mut int_count = 0;
-        let mut signed_count = 0;
-        let mut unsigned_count = 0;
-        let mut double_count = 0;
+        let mut long = false;
+        let mut long_long = false;
+        let mut int = false;
+        let mut signed = false;
+        let mut unsigned = false;
+        let mut double = false;
+        let mut char = false;
 
         loop {
             let token = self.peek()?;
             match token {
                 Token::Double => {
+                    if int || long || long_long || char || signed || unsigned {
+                        bail!("integer types and double cannot be used together");
+                    }
                     self.next_token()?;
-                    if double_count > 0 {
+                    if double {
                         bail!("Duplicate double specifier");
                     }
-                    double_count += 1;
+                    double = true;
                 }
                 Token::Int => {
+                    if char || double {
+                        bail!("integer types and char cannot be used together");
+                    }
                     self.next_token()?;
-                    int_count += 1;
+                    if int {
+                        bail!("Duplicate int specifier");
+                    }
+                    int = true;
                 }
                 Token::Long => {
-                    if long_count > 0 {
+                    if char || double {
+                        bail!("integer types and char cannot be used together");
+                    }
+                    // this code assumes that all the 'long's are together
+                    if long_long {
                         bail!("Duplicate long specifier");
                     }
-                    long_count += 1;
-                    self.next_token()?;
-                    loop {
-                        let token = self.peek()?;
-                        if token == Token::Long {
-                            self.next_token()?;
-                            long_count += 1;
-                        } else {
-                            break;
-                        }
+                    if long {
+                        long_long = true;
+                    } else {
+                        long = true;
                     }
+                    self.next_token()?;
+                }
+                Token::Char => {
+                    if int || double {
+                        bail!("integer types and char cannot be used together");
+                    }
+                    self.next_token()?;
+                    if char {
+                        bail!("Duplicate char specifier");
+                    }
+
+                    char = true;
                 }
                 Token::Signed => {
+                    if double {
+                        bail!("double is always signed");
+                    }
                     self.next_token()?;
-                    if signed_count > 0 {
+                    if signed {
                         bail!("Duplicate signed specifier");
                     }
-                    if unsigned_count > 0 {
+                    if unsigned {
                         bail!("signed and unsigned cannot be used together");
                     }
-                    signed_count += 1;
+                    signed = true;
                 }
                 Token::Unsigned => {
+                    if double {
+                        bail!("double is always signed");
+                    }
                     self.next_token()?;
-                    if unsigned_count > 0 {
+                    if unsigned {
                         bail!("Duplicate unsigned specifier");
                     }
-                    if signed_count > 0 {
+                    if signed {
                         bail!("signed and unsigned cannot be used together");
                     }
-                    unsigned_count += 1;
+                    unsigned = true;
                 }
                 Token::Void => {
                     self.next_token()?;
@@ -399,49 +429,100 @@ impl Parser {
                 _ => break,
             };
         }
-        if double_count > 0 {
-            if long_count > 0 {
-                bail!("long and double cannot be used together");
+
+        if char {
+            if signed {
+                specifiers.specified_type = Some(SymbolType::SChar);
+            } else if unsigned {
+                specifiers.specified_type = Some(SymbolType::UChar);
+            } else {
+                specifiers.specified_type = Some(SymbolType::Char);
             }
-            if int_count > 0 {
-                bail!("int and double cannot be used together");
-            }
-            if signed_count > 0 {
-                bail!("signed and double cannot be used together");
-            }
-            if unsigned_count > 0 {
-                bail!("unsigned and double cannot be used together");
-            }
+            return Ok(specifiers);
+        }
+
+        if double {
             specifiers.specified_type = Some(SymbolType::Double);
             return Ok(specifiers);
         }
-        if unsigned_count > 0 {
-            match (long_count, int_count) {
-                (0, 0) => specifiers.specified_type = Some(SymbolType::UInt32),
-                (1, 1) => specifiers.specified_type = Some(SymbolType::UInt32),
-                (1, 0) => specifiers.specified_type = Some(SymbolType::UInt32),
-                (2, 0) => specifiers.specified_type = Some(SymbolType::UInt64),
-                (2, 1) => specifiers.specified_type = Some(SymbolType::UInt64),
-                (0, 1) => specifiers.specified_type = Some(SymbolType::UInt32),
-                _ => bail!("Invalid type specifier"),
+        if long_long {
+            if signed {
+                specifiers.specified_type = Some(SymbolType::Int64);
+            } else if unsigned {
+                specifiers.specified_type = Some(SymbolType::UInt64);
+            } else {
+                specifiers.specified_type = Some(SymbolType::Int64);
             }
-        } else {
-            match (long_count, int_count) {
-                (0, 0) => {
-                    specifiers.specified_type = if signed_count > 0 {
-                        Some(SymbolType::Int32)
-                    } else {
-                        None
-                    }
-                }
-                (1, 1) => specifiers.specified_type = Some(SymbolType::Int32),
-                (1, 0) => specifiers.specified_type = Some(SymbolType::Int32),
-                (2, 0) => specifiers.specified_type = Some(SymbolType::Int64),
-                (2, 1) => specifiers.specified_type = Some(SymbolType::Int64),
-                (0, 1) => specifiers.specified_type = Some(SymbolType::Int32),
-                _ => bail!("Invalid type specifier"),
-            }
+            return Ok(specifiers);
         }
-        Ok(specifiers)
+        if long {
+            if signed {
+                specifiers.specified_type = Some(SymbolType::Int64);
+            } else if unsigned {
+                specifiers.specified_type = Some(SymbolType::UInt64);
+            } else {
+                specifiers.specified_type = Some(SymbolType::Int32);
+            }
+            specifiers.specified_type = Some(SymbolType::Int32);
+            return Ok(specifiers);
+        }
+        // if !signed && !unsigned && !int {
+        //     bail!("No type specified");
+        // }
+        if signed || int {
+            specifiers.specified_type = Some(SymbolType::Int32);
+        }
+        if unsigned {
+            specifiers.specified_type = Some(SymbolType::UInt32);
+        }
+        return Ok(specifiers);
+        //let stype =
+        // if double_count > 0 {
+        //     if long_count > 0 {
+        //         bail!("long and double cannot be used together");
+        //     }
+        //     if int_count > 0 {
+        //         bail!("int and double cannot be used together");
+        //     }
+        //     if signed_count > 0 {
+        //         bail!("signed and double cannot be used together");
+        //     }
+        //     if unsigned_count > 0 {
+        //         bail!("unsigned and double cannot be used together");
+        //     }
+        //     if char_count > 0 {
+        //         bail!("char and double cannot be used together");
+        //     }
+        //     specifiers.specified_type = Some(SymbolType::Double);
+        //     return Ok(specifiers);
+        // }
+        // if unsigned_count > 0 {
+        //     match (long_count, int_count) {
+        //         (0, 0) => specifiers.specified_type = Some(SymbolType::UInt32),
+        //         (1, 1) => specifiers.specified_type = Some(SymbolType::UInt32),
+        //         (1, 0) => specifiers.specified_type = Some(SymbolType::UInt32),
+        //         (2, 0) => specifiers.specified_type = Some(SymbolType::UInt64),
+        //         (2, 1) => specifiers.specified_type = Some(SymbolType::UInt64),
+        //         (0, 1) => specifiers.specified_type = Some(SymbolType::UInt32),
+        //         _ => bail!("Invalid type specifier"),
+        //     }
+        // } else {
+        //     match (long_count, int_count) {
+        //         (0, 0) => {
+        //             specifiers.specified_type = if signed_count > 0 {
+        //                 Some(SymbolType::Int32)
+        //             } else {
+        //                 None
+        //             }
+        //         }
+        //         (1, 1) => specifiers.specified_type = Some(SymbolType::Int32),
+        //         (1, 0) => specifiers.specified_type = Some(SymbolType::Int32),
+        //         (2, 0) => specifiers.specified_type = Some(SymbolType::Int64),
+        //         (2, 1) => specifiers.specified_type = Some(SymbolType::Int64),
+        //         (0, 1) => specifiers.specified_type = Some(SymbolType::Int32),
+        //         _ => bail!("Invalid type specifier"),
+        //     }
+        // }
+        //Ok(specifiers)
     }
 }

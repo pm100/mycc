@@ -1,10 +1,11 @@
-use crate::declarator::indent;
+use crate::{declarator::indent, expr::StringLiteralMode, tacky::StaticInit};
 use anyhow::{bail, Result};
 use backtrace::{Backtrace, BacktraceFrame, BacktraceSymbol};
 use enum_as_inner::EnumAsInner;
 use std::{
     collections::{HashMap, VecDeque},
     path::{Path, PathBuf},
+    vec,
 };
 
 use crate::{
@@ -28,7 +29,7 @@ struct SwitchContext {
 pub struct Parser {
     lexer: Lexer,
     source_file: PathBuf,
-    tacky: TackyProgram,
+    pub tacky: TackyProgram,
     pub next_temporary: usize,
     eof_hit: bool,
     peeked_tokens: VecDeque<Token>,
@@ -43,6 +44,8 @@ pub struct Parser {
     current_function_name: String,
     in_function_body: bool,
     pub externs: HashMap<String, Extern>,
+    // pub string_mode: StringLiteralMode,
+    pub static_init: bool,
     // depth: usize,
 }
 #[derive(Debug, Clone, PartialEq, EnumAsInner)]
@@ -71,6 +74,8 @@ impl Parser {
             current_function_name: String::new(),
             in_function_body: false,
             externs: HashMap::new(),
+            //  string_mode: StringLiteralMode::InitStatic,
+            static_init: false,
             // depth: 0,
         }
     }
@@ -253,6 +258,9 @@ impl Parser {
                 | SymbolType::Int32
                 | SymbolType::Int64
                 | SymbolType::UInt32
+                | SymbolType::Char
+                | SymbolType::SChar
+                | SymbolType::UChar
                 | SymbolType::UInt64 => {
                     println!("{:?} {:?}", top, found);
                     if linkage == SymbolLinkage::External
@@ -666,81 +674,11 @@ impl Parser {
 
         // get the initializer value  - if any
 
-        let init_value: Vec<Value> = if init {
+        let init_value: Vec<StaticInit> = if init {
             self.do_initializer(&rename, &symbol_type, is_auto)?
         } else {
             vec![]
         };
-        // if init {
-        //     // let val = self.do_rvalue_expression()?;
-        //     let val = self.parse_initializer()?;
-        //     println!("val = {:?}", val);
-        //     // let val = match val {
-        //     //     Initializer::SingleInit(v) => v,
-        //     //     Initializer::CompoundInit(_) => {
-        //     //         bail!("Compound initializer not allowed here")
-        //     //     }
-        //     // };
-        //     if self.in_function_body && is_auto {
-        //         //
-        //         let converted = self.convert_by_assignment(&val, &symbol_type)?;
-        //         self.instruction(Instruction::Copy(
-        //             converted.clone(),
-        //             Value::Variable(rename.clone(), symbol_type.clone()),
-        //         ));
-        //         Some(converted)
-        //     } else {
-        //         // if val.is_variable() {
-        //         //     bail!("Static variable must be initialized to a constant");
-        //         // }
-        //         if !is_auto {
-        //             let converted =
-        //                 if symbol_type.is_pointer() && Self::is_null_pointer_constant(&val) {
-        //                     Value::UInt32(0)
-        //                 } else {
-        //                     self.convert_by_assignment(&val, &symbol_type)?
-        //                 };
-
-        //             // self.externs
-        //             //     .entry(rename.to_string())
-        //             //     .and_modify(|e| {
-        //             //         e.state = SymbolState::Defined;
-        //             //         e.value = Some(converted.clone());
-        //             //     })
-        //             //     .or_insert(Extern {
-        //             //         name: rename.to_string(),
-        //             //         linkage: linkage.clone(),
-        //             //         state: SymbolState::Defined,
-        //             //         value: Some(converted.clone()),
-        //             //         stype: symbol_type.clone(),
-        //             //     });
-        //             Some(converted)
-        //         } else {
-        //             None
-        //         }
-        //     }
-        //     //  converted
-        //     // } else if !is_auto {
-        //     //     self.externs
-        //     //         .entry(rename.to_string())
-        //     //         .and_modify(|e| {
-        //     //             println!("update extern {:?} {:?}", rename, e);
-        //     //             if e.state != SymbolState::Defined && state != SymbolState::Declared {
-        //     //                 e.state = SymbolState::Defined
-        //     //             }
-        //     //         })
-        //     //         .or_insert(Extern {
-        //     //             name: rename.to_string(),
-        //     //             linkage: linkage.clone(),
-        //     //             state, //SymbolState::Defined,
-        //     //             value: None,
-        //     //             stype: symbol_type.clone(),
-        //     //         });
-        //     //     None
-        //     // } else {
-        // } else {
-        //     None
-        // };
 
         // update the static / externs table
 
@@ -785,24 +723,92 @@ impl Parser {
         self.expect(Token::SemiColon)?;
         Ok(())
     }
+    fn string_to_array(value: &Value) -> Initializer {
+        let init = if let Value::String(s) = value {
+            let chars = s
+                .chars()
+                .map(|ch| Initializer::SingleInit(Value::Char(ch as i8)))
+                .collect::<Vec<_>>();
+            Initializer::CompoundInit(chars)
+        } else {
+            Initializer::SingleInit(value.clone())
+        };
+        init
+    }
+
+    pub fn make_static_string(&mut self, value: &Value) -> Result<String> {
+        let str = value.as_string().unwrap().clone();
+        let sname = format!("string${}", self.tacky.static_constants.len());
+        self.tacky.add_static_constant(
+            &sname,
+            vec![StaticInit::InitString(str.to_owned(), true)],
+            false,
+            false,
+            &SymbolType::Array(Box::new(SymbolType::Char), str.len() + 1),
+        );
+        Ok(sname)
+    }
 
     fn do_initializer(
         &mut self,
         name: &str,
         dest_type: &SymbolType,
         is_auto: bool,
-    ) -> Result<Vec<Value>> {
-        let init = self.parse_initializer()?;
+    ) -> Result<Vec<StaticInit>> {
+        let init = self.parse_initializer(is_auto, dest_type)?;
         // simple initializer or compound
         // assign via static or auto
+        println!("do_initializer {:?} {:?} {:?}", name, init, dest_type);
+
         let vals = match (is_auto, &init) {
             (true, Initializer::SingleInit(v)) => {
                 // int x = 42;
-                let converted = self.convert_by_assignment(v, &dest_type.clone())?;
-                self.instruction(Instruction::Copy(
-                    converted.clone(),
-                    Value::Variable(name.to_owned(), dest_type.clone()),
-                ));
+                if v.is_string() {
+                    if dest_type.is_pointer() {
+                        if !dest_type.get_inner_type()?.is_char() {
+                            bail!("variable is not char type");
+                        }
+                        // char *str = "hello";
+
+                        let sname = self.make_static_string(v)?;
+                        self.instruction(Instruction::GetAddress(
+                            Value::Variable(sname, SymbolType::Pointer(Box::new(SymbolType::Char))),
+                            Value::Variable(name.to_owned(), dest_type.clone()),
+                        ));
+                    } else {
+                        // char str[6] = "hello";
+                        let str = v.as_string().unwrap().clone();
+                        if !dest_type.get_inner_type()?.is_character() {
+                            bail!("variable is not char type");
+                        }
+                        let mut offset = 0;
+                        let size = dest_type.as_array().unwrap().1;
+                        if str.len() > *size {
+                            bail!("String initializer too long")
+                        }
+                        for ch in str.chars() {
+                            self.instruction(Instruction::CopyToOffset(
+                                Value::Char(ch as i8),
+                                Value::Variable(name.to_owned(), dest_type.clone()),
+                                offset,
+                            ));
+                            offset += 1;
+                        }
+                        if str.len() < *size {
+                            self.instruction(Instruction::CopyToOffset(
+                                Value::Char(0 as i8),
+                                Value::Variable(name.to_owned(), dest_type.clone()),
+                                offset,
+                            ));
+                        }
+                    }
+                } else {
+                    let converted = self.convert_by_assignment(v, &dest_type.clone())?;
+                    self.instruction(Instruction::Copy(
+                        converted.clone(),
+                        Value::Variable(name.to_owned(), dest_type.clone()),
+                    ));
+                }
                 vec![]
             }
             (false, Initializer::SingleInit(v)) => {
@@ -810,25 +816,74 @@ impl Parser {
                 if v.is_variable() {
                     bail!("Static variable must be initialized to a constant");
                 }
-                let converted = if dest_type.is_pointer() && Self::is_null_pointer_constant(v) {
-                    Value::UInt32(0)
+                if v.is_string() {
+                    if dest_type.is_pointer() {
+                        // static char *str = "hello";
+                        if !dest_type.get_inner_type()?.is_char() {
+                            bail!("variable is not char type");
+                        }
+
+                        let sname = self.make_static_string(v)?;
+                        let ptr = StaticInit::PointerInit(sname);
+                        vec![ptr]
+                    } else {
+                        // static char str[6] = "hello";
+                        let str = v.as_string().unwrap().clone();
+                        if !dest_type.get_inner_type()?.is_character() {
+                            bail!("variable is not char type");
+                        }
+                        let mut res = vec![StaticInit::InitString(str.to_owned(), false)];
+                        let size = dest_type.as_array().unwrap().1;
+                        if str.len() > *size {
+                            bail!("String initializer too long")
+                        }
+                        for _ in str.len()..*size {
+                            res.push(StaticInit::InitChar(0 as i8));
+                        }
+                        res
+                    }
                 } else {
-                    self.convert_by_assignment(v, dest_type)?
-                };
-                vec![converted]
+                    let converted = if dest_type.is_pointer() && Self::is_null_pointer_constant(v) {
+                        StaticInit::InitU32(0)
+                    } else {
+                        let con = self.convert_by_assignment(v, dest_type)?;
+                        self.value_to_staticinit(&con)?
+                    };
+
+                    vec![converted]
+                }
             }
-            (true, Initializer::CompoundInit(_)) => {
+            (true, Initializer::CompoundInit(ci)) => {
                 //  {
                 //      int x[3] = {1,2,3};
                 //  }
                 if !dest_type.is_array() {
                     bail!("Compound initializer not allowed here")
                 }
-                let values = Self::unwind_nested(Some(&init), dest_type)?;
+
+                unsafe { INDENT = 0 }
+                let values = Self::unwind_nested(Some(init), dest_type)?;
                 let elem_type = Self::get_inner_array_type(dest_type)?;
                 let mut offset = 0;
                 for v in &values {
-                    let converted = self.convert_by_assignment(v, &elem_type)?;
+                    let converted = if v.is_string() {
+                        if !elem_type.is_pointer() {
+                            bail!("String initializer not allowed here")
+                        }
+                        if !elem_type.get_inner_type()?.is_char() {
+                            bail!("variable is not char type");
+                        }
+                        let sname = self.make_static_string(v)?;
+                        let straddr =
+                            self.make_temporary(&SymbolType::Pointer(Box::new(SymbolType::Char)));
+                        self.instruction(Instruction::GetAddress(
+                            Value::Variable(sname, SymbolType::Pointer(Box::new(SymbolType::Char))),
+                            straddr.clone(),
+                        ));
+                        straddr
+                    } else {
+                        self.convert_by_assignment(v, &elem_type)?
+                    };
                     self.instruction(Instruction::CopyToOffset(
                         converted.clone(),
                         Value::Variable(name.to_owned(), dest_type.clone()),
@@ -839,37 +894,77 @@ impl Parser {
                 }
                 vec![]
             }
-            (false, Initializer::CompoundInit(_)) => {
+            (false, Initializer::CompoundInit(ci)) => {
                 // static int x[3] = {1,2,3};
 
                 if !dest_type.is_array() {
                     bail!("Compound initializer not allowed here")
                 }
+
                 let elem_type = Self::get_inner_array_type(dest_type)?;
-                let init_values = Self::unwind_nested(Some(&init), dest_type)?;
+                let init_values = Self::unwind_nested(Some(init), dest_type)?;
                 let mut values = Vec::new();
                 for v in init_values {
-                    let converted = if dest_type.is_pointer() && Self::is_null_pointer_constant(&v)
-                    {
-                        Value::UInt32(0)
+                    let converted = if v.is_string() {
+                        if !elem_type.is_pointer() {
+                            bail!("String initializer not allowed here")
+                        }
+                        if !elem_type.get_inner_type()?.is_char() {
+                            bail!("variable is not char type");
+                        }
+                        let sname = self.make_static_string(&v)?;
+                        let ptr = StaticInit::PointerInit(sname);
+                        ptr
                     } else {
-                        self.convert_by_assignment(&v, &elem_type)?
+                        if dest_type.is_pointer() && Self::is_null_pointer_constant(&v) {
+                            StaticInit::InitU32(0)
+                        } else {
+                            let con = self.convert_by_assignment(&v, &elem_type)?;
+                            self.value_to_staticinit(&con)?
+                        }
                     };
                     values.push(converted);
                 }
-                // let size = Self::get_size_of_stype(&atype);
 
                 values
             }
         };
         Ok(vals)
     }
-    fn unwind_nested(
-        compound_init: Option<&Initializer>,
-        stype: &SymbolType,
-    ) -> Result<Vec<Value>> {
+    fn value_to_staticinit(&mut self, value: &Value) -> Result<StaticInit> {
+        match value {
+            Value::Int32(v) => Ok(StaticInit::InitI32(*v)),
+            Value::Int64(v) => Ok(StaticInit::InitI64(*v)),
+            Value::UInt32(v) => Ok(StaticInit::InitU32(*v)),
+            Value::UInt64(v) => Ok(StaticInit::InitU64(*v)),
+            Value::Char(v) => Ok(StaticInit::InitChar(*v as i8)),
+            Value::UChar(v) => Ok(StaticInit::InitUChar(*v as u8)),
+            Value::String(s) => Ok(StaticInit::InitString(s.clone(), true)),
+            Value::Double(v) => Ok(StaticInit::InitDouble(*v)),
+            _ => bail!("Expected integer, got {:?}", value),
+        }
+    }
+    fn unwind_nested(compound_init: Option<Initializer>, stype: &SymbolType) -> Result<Vec<Value>> {
         indent(&format!("unwind_nested {:?} {:?} ", compound_init, stype));
-        match compound_init {
+        let compound_init = if let Some(ci) = compound_init {
+            if let Initializer::SingleInit(v) = ci {
+                if v.is_string() && stype.is_array() {
+                    let s = v.as_string().unwrap().clone();
+                    let chars = s
+                        .chars()
+                        .map(|ch| Initializer::SingleInit(Value::Char(ch as i8)))
+                        .collect::<Vec<_>>();
+                    Some(Initializer::CompoundInit(chars))
+                } else {
+                    Some(Initializer::SingleInit(v.clone()))
+                }
+            } else {
+                Some(ci.clone())
+            }
+        } else {
+            compound_init
+        };
+        let ret = match compound_init {
             Some(Initializer::SingleInit(v)) => Ok(vec![v.clone()]),
             Some(Initializer::CompoundInit(v)) => {
                 let mut result = Vec::new();
@@ -895,7 +990,7 @@ impl Parser {
                     unsafe { INDENT += 1 };
 
                     result.extend(Self::unwind_nested(None, &inner)?);
-                    unsafe { INDENT = 1 };
+                    unsafe { INDENT -= 1 };
                 }
 
                 Ok(result)
@@ -917,16 +1012,20 @@ impl Parser {
                     Ok(vec![Value::Int32(0)])
                 }
             }
-        }
+        };
+        indent(&format!("unwind_nested result {:?}", ret));
+        ret
     }
-    fn parse_initializer(&mut self) -> Result<Initializer> {
+    fn parse_initializer(&mut self, is_auto: bool, stype: &SymbolType) -> Result<Initializer> {
         let token = self.peek()?;
+        println!("parse_initializer {:?}", token);
         match token {
             Token::LeftBrace => {
                 self.next_token()?;
                 let mut values = Vec::new();
+                let inner = Self::get_inner_type(stype)?;
                 while self.peek()? != Token::RightBrace {
-                    values.push(self.parse_initializer()?);
+                    values.push(self.parse_initializer(is_auto, &inner)?);
                     if self.peek()? == Token::Comma {
                         self.next_token()?;
                     } else {
@@ -941,8 +1040,8 @@ impl Parser {
                 //Ok(values)
             }
             _ => {
-                let val = self.do_rvalue_expression()?;
-
+                let val = self.do_init_expression(is_auto, stype)?;
+                // Ok(Self::string_to_array(&val))
                 Ok(Initializer::SingleInit(val))
             }
         }
@@ -1199,9 +1298,14 @@ impl Parser {
         // evaluate the condition once
 
         let value = this.do_rvalue_expression()?;
-        if Self::get_type(&value) == SymbolType::Double || value.is_pointer() {
+        if !value.stype().is_integer() {
             bail!("Switch value must be an integer");
         }
+        let value = if value.stype().is_character() {
+            this.convert_to(&value, &SymbolType::Int32, false)?
+        } else {
+            value.clone()
+        };
         this.expect(Token::RightParen)?;
 
         let next_drop_thru_label = this.make_label("next_drop_thru");
@@ -1392,8 +1496,9 @@ impl Parser {
         self.local_variables.get_mut(len - 1).unwrap()
     }
     pub(crate) fn peek(&mut self) -> Result<Token> {
-        //   println!("peek {:?}", token);
-        self.peek_n(0)
+        let token = self.peek_n(0);
+        //  println!("peek {:?}", token);
+        token
     }
 
     pub(crate) fn peek_n(&mut self, n: usize) -> Result<Token> {

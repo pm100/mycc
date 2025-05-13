@@ -30,6 +30,8 @@ pub enum Token {
     UConstant(u32),
     ULongConstant(u64),
     F64Constant(f64),
+    CharConstant(char),
+    StringConstant(String),
 
     // operators
     Complement, // ~
@@ -90,6 +92,7 @@ pub enum Token {
     Signed,
     Unsigned,
     Double,
+    Char,
 
     // special
     Eof,
@@ -269,6 +272,8 @@ impl Lexer {
                 }
                 '[' => Token::LeftBracket,
                 ']' => Token::RightBracket,
+                '\'' => self.parse_char()?,
+                '"' => self.parse_string()?,
                 _ => {
                     if char.is_ascii_digit() || char == '.' {
                         let t = self.number()?;
@@ -291,7 +296,56 @@ impl Lexer {
             return Ok(token);
         }
     }
+    fn parse_string(&mut self) -> Result<Token> {
+        let mut s = String::new();
+        while !self.at_end() {
+            let ch = self.advance();
+            if ch == '"' {
+                return Ok(Token::StringConstant(s));
+            } else if ch == '\\' {
+                let ch = self.advance();
+                s.push(Self::lookup_escape(ch)?);
+            } else {
+                s.push(ch);
+            }
+        }
+        bail!("Error: unterminated string literal")
+    }
+    fn parse_char(&mut self) -> Result<Token> {
+        let ch = self.advance();
+        let ch = if ch == '\\' {
+            let ch = self.advance();
+            Self::lookup_escape(ch)?
+        } else {
+            if ch == '\'' {
+                bail!("Error: empty char literal")
+            }
+            ch
+        };
 
+        if !self.match_next('\'') {
+            bail!("Error: unterminated char literal")
+        }
+
+        Ok(Token::CharConstant(ch))
+    }
+    fn lookup_escape(ch: char) -> Result<char> {
+        match ch {
+            'n' => Ok('\n'),
+            't' => Ok('\t'),
+            'b' => Ok('\x08'),
+            'r' => Ok('\r'),
+            '0' => Ok('\0'),
+            '\\' => Ok('\\'),
+            '\'' => Ok('\''),
+            '"' => Ok('"'),
+            '?' => Ok('?'),
+            'a' => Ok('\x07'),
+            'f' => Ok('\x0C'),
+            'v' => Ok('\x0B'),
+            _ => bail!("Error: invalid escape sequence"),
+        }
+    }
     fn identifier(&mut self) -> Token {
         let start = self.current_pos - 1;
         while self.peek().is_alphanumeric() || self.peek() == '_' {
@@ -319,6 +373,7 @@ impl Lexer {
             "signed" => Token::Signed,
             "unsigned" => Token::Unsigned,
             "double" => Token::Double,
+            "char" => Token::Char,
 
             _ => Token::Identifier(s.to_string()),
         }
@@ -348,9 +403,7 @@ impl Lexer {
     fn number(&mut self) -> Result<Token> {
         match self.try_parse_float() {
             MaybeNumber::None => bail!("Error: invalid number"),
-            MaybeNumber::Float(f) => {
-                Ok(Token::F64Constant(f))
-            }
+            MaybeNumber::Float(f) => Ok(Token::F64Constant(f)),
             MaybeNumber::Number(mut val) => {
                 // let start = self.current_pos - 1;
                 // while self.peek().is_ascii_digit() {

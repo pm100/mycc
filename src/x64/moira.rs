@@ -4,7 +4,7 @@ use anyhow::Result;
 
 use crate::{
     symbols::SymbolType,
-    tacky::{StaticInit, Value},
+    tacky::{StaticConstant, StaticInit, StaticVariable, Value},
 };
 
 use super::moira_inst::Instruction;
@@ -22,20 +22,20 @@ pub struct Function {
     pub instructions: Vec<Instruction>,
     pub global: bool,
 }
-#[derive(Debug, Clone)]
-pub struct StaticVariable {
-    pub name: String,
-    pub values: Vec<Value>,
-    pub global: bool,
-    pub external: bool,
-    pub stype: SymbolType,
-}
-#[derive(Debug, Clone)]
-pub struct StaticConstant {
-    pub name: String,
-    pub align: u8,
-    pub value: StaticInit,
-}
+//#[derive(Debug, Clone)]
+// pub struct StaticVariable {
+//     pub name: String,
+//     pub values: Vec<Value>,
+//     pub global: bool,
+//     pub external: bool,
+//     pub stype: SymbolType,
+// }
+// #[derive(Debug, Clone)]
+// pub struct StaticConstant {
+//     pub name: String,
+//     pub align: u8,
+//     pub value: StaticInit,
+// }
 
 impl Default for MoiraProgram {
     fn default() -> Self {
@@ -76,7 +76,7 @@ impl MoiraProgram {
         for top_var in self.top_vars.iter() {
             println!(
                 "TopVar: {} = {:?} Ext {}",
-                top_var.name, top_var.values, top_var.external
+                top_var.name, top_var.init, top_var.external
             );
         }
         for static_constant in self.static_constants.iter() {
@@ -84,7 +84,7 @@ impl MoiraProgram {
                 "StaticConstant: {} {} = {:?} Align {}",
                 static_constant.1.name,
                 static_constant.0,
-                static_constant.1.value,
+                static_constant.1.init,
                 static_constant.1.align
             );
         }

@@ -3,7 +3,10 @@ use std::collections::HashMap;
 use anyhow::{bail, Result};
 use enum_as_inner::EnumAsInner;
 
-use crate::{parser::Parser, tacky::Value};
+use crate::{
+    parser::Parser,
+    tacky::{StaticInit, Value},
+};
 
 #[derive(Debug, Clone)]
 pub(crate) struct VariableName {
@@ -23,6 +26,9 @@ pub enum SymbolType {
     UInt32,
     UInt64,
     Double,
+    Char,
+    SChar,
+    UChar,
     Function(Vec<SymbolType>, Box<SymbolType>),
     Pointer(Box<SymbolType>),
     Array(Box<SymbolType>, usize),
@@ -55,8 +61,22 @@ pub struct Extern {
     pub name: String,
     pub linkage: SymbolLinkage,
     pub state: SymbolState,
-    pub value: Vec<Value>,
+    pub value: Vec<StaticInit>,
     pub stype: SymbolType,
+}
+impl SymbolType {
+    pub fn is_integer(&self) -> bool {
+        Parser::is_integer(&self)
+    }
+    pub fn is_character(&self) -> bool {
+        matches!(
+            self,
+            SymbolType::Char | SymbolType::UChar | SymbolType::SChar
+        )
+    }
+    pub fn get_inner_type(&self) -> Result<SymbolType> {
+        Parser::get_inner_type(self)
+    }
 }
 impl Parser {
     pub fn get_pointee_type(stype: &SymbolType) -> Result<SymbolType> {

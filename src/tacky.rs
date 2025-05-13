@@ -1,12 +1,13 @@
-use std::collections::HashMap;
+use std::{clone, collections::HashMap};
 
 use enum_as_inner::EnumAsInner;
 
-use crate::{symbols::SymbolType, x64::moira_inst::AssemblyType};
+use crate::{parser::Parser, symbols::SymbolType, x64::moira_inst::AssemblyType};
 
 pub struct TackyProgram {
     pub functions: Vec<Function>,
     pub static_variables: HashMap<String, StaticVariable>,
+    pub static_constants: HashMap<String, StaticConstant>,
     current_function: usize,
 }
 #[derive(Debug)]
@@ -69,8 +70,10 @@ pub enum Value {
     UInt32(u32),
     UInt64(u64),
     Double(f64),
+    Char(i8),
+    UChar(u8),
+    String(String),
     Variable(String, SymbolType),
-    // Dereference(Box<Value>),
 }
 #[derive(Debug, Clone, PartialEq)]
 pub enum PendingResult {
@@ -90,6 +93,12 @@ impl PendingResult {
             PendingResult::Dereference(v) => v.is_array(),
         }
     }
+    pub fn is_string(&self) -> bool {
+        match self {
+            PendingResult::PlainValue(v) => matches!(v, Value::String(_)),
+            PendingResult::Dereference(v) => matches!(v, Value::String(_)),
+        }
+    }
 }
 impl Value {
     pub fn is_pointer(&self) -> bool {
@@ -97,6 +106,12 @@ impl Value {
     }
     pub fn is_array(&self) -> bool {
         matches!(self, Value::Variable(_, SymbolType::Array(_, _)))
+    }
+    pub fn stype(&self) -> SymbolType {
+        Parser::get_type(self)
+    }
+    pub fn is_constant(&self) -> bool {
+        !matches!(self, Value::Variable(_, _))
     }
 }
 #[derive(Debug)]
@@ -115,15 +130,28 @@ pub enum StaticInit {
     InitU32(u32),
     InitU64(u64),
     InitDouble(f64),
+    InitString(String, bool),
+    InitChar(i8),
+    InitUChar(u8),
+    PointerInit(String),
     InitNone,
 }
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct StaticVariable {
     pub name: String,
     pub stype: SymbolType,
     pub global: bool,
     pub external: bool,
-    pub init: Vec<Value>,
+    pub init: Vec<StaticInit>,
+}
+#[derive(Debug, Clone)]
+pub struct StaticConstant {
+    pub name: String,
+    pub stype: SymbolType,
+    pub global: bool,
+    pub external: bool,
+    pub init: Vec<StaticInit>,
+    pub align: usize,
 }
 impl Default for TackyProgram {
     fn default() -> Self {
@@ -137,36 +165,17 @@ impl TackyProgram {
             functions: Vec::new(),
             current_function: 0,
             static_variables: HashMap::new(),
+            static_constants: HashMap::new(),
         }
     }
     pub fn add_static_variable(
         &mut self,
         name: &str,
-        values: Vec<Value>,
+        values: Vec<StaticInit>,
         global: bool,
         external: bool,
         stype: &SymbolType,
     ) -> Option<StaticVariable> {
-        // let mut init = values
-        //     .iter()
-        //     .map(|v| match v {
-        //         Value::Int32(v) => StaticInit::InitI32(*v),
-        //         Value::Int64(v) => StaticInit::InitI64(*v),
-        //         Value::UInt32(v) => StaticInit::InitU32(*v),
-        //         Value::UInt64(v) => StaticInit::InitU64(*v),
-        //         Value::Double(v) => StaticInit::InitDouble(*v),
-
-        //         // => StaticInit::InitNone,
-        //         _ => panic!(
-        //             "Invalid static variable type {:?} for {}={:?}",
-        //             stype, name, v
-        //         ),
-        //     })
-        //     .collect::<Vec<_>>();
-        // if init.is_empty() {
-        //     init.push(StaticInit::InitNone);
-        // }
-
         self.static_variables.insert(
             name.to_string(),
             StaticVariable {
@@ -175,6 +184,26 @@ impl TackyProgram {
                 init: values,
                 global,
                 external,
+            },
+        )
+    }
+    pub fn add_static_constant(
+        &mut self,
+        name: &str,
+        values: Vec<StaticInit>,
+        global: bool,
+        external: bool,
+        stype: &SymbolType,
+    ) -> Option<StaticConstant> {
+        self.static_constants.insert(
+            name.to_string(),
+            StaticConstant {
+                name: name.to_string(),
+                stype: stype.clone(),
+                init: values,
+                global,
+                external,
+                align: 0,
             },
         )
     }
@@ -201,10 +230,16 @@ impl TackyProgram {
             Value::UInt32(_) => AssemblyType::LongWord,
             Value::UInt64(_) => AssemblyType::QuadWord,
             Value::Double(_) => AssemblyType::QuadWord,
+            Value::Char(_) => AssemblyType::Byte,
+            Value::UChar(_) => AssemblyType::Byte,
+            Value::String(_) => todo!(),
             Value::Variable(_, stype) => match stype {
                 SymbolType::Int32 | SymbolType::UInt32 => AssemblyType::LongWord,
                 SymbolType::Int64 | SymbolType::UInt64 => AssemblyType::QuadWord,
                 SymbolType::Double => AssemblyType::QuadWord,
+                SymbolType::Char => AssemblyType::Byte,
+                SymbolType::SChar => AssemblyType::Byte,
+                SymbolType::UChar => AssemblyType::Byte,
                 SymbolType::Function(_, _) => AssemblyType::QuadWord, // TODO
                 SymbolType::Pointer(_) => AssemblyType::QuadWord,
                 SymbolType::Array(_, _) => todo!(), // TODO
@@ -235,6 +270,16 @@ impl TackyProgram {
                 static_variable.global,
                 static_variable.external,
                 static_variable.stype,
+            );
+        }
+        for static_constant in self.static_constants.values() {
+            println!(
+                "Static Constant: {} = {:?} Global: {} External: {} Stype: {:?}",
+                static_constant.name,
+                static_constant.init,
+                static_constant.global,
+                static_constant.external,
+                static_constant.stype,
             );
         }
         for function in &self.functions {

@@ -13,13 +13,22 @@ impl Parser {
                 | SymbolType::UInt32
                 | SymbolType::UInt64
                 | SymbolType::Double
+                | SymbolType::Char
+                | SymbolType::UChar
+                | SymbolType::SChar
         )
     }
 
     pub fn is_integer(stype: &SymbolType) -> bool {
         matches!(
             stype,
-            SymbolType::Int32 | SymbolType::Int64 | SymbolType::UInt32 | SymbolType::UInt64
+            SymbolType::Int32
+                | SymbolType::Int64
+                | SymbolType::UInt32
+                | SymbolType::UInt64
+                | SymbolType::Char
+                | SymbolType::UChar
+                | SymbolType::SChar
         )
     }
     pub fn get_integer(value: &Value) -> Result<usize> {
@@ -28,6 +37,8 @@ impl Parser {
             Value::Int64(v) => Ok(*v as usize),
             Value::UInt32(v) => Ok(*v as usize),
             Value::UInt64(v) => Ok(*v as usize),
+            Value::Char(v) => Ok(*v as usize),
+            Value::UChar(v) => Ok(*v as usize),
             _ => bail!("Expected integerxxx, got {:?}", value),
         }
     }
@@ -72,6 +83,7 @@ impl Parser {
                 self.local_variables().values().any(|v| v.name == *var)
                     || self.lookup_symbol(var).is_some()
             }
+            Value::String(_) => true,
             _ => false,
         }
     }

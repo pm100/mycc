@@ -4,6 +4,8 @@ use enum_as_inner::EnumAsInner;
 pub enum Instruction {
     Ret,
     Mov(AssemblyType, Operand, Operand),
+    MovSignExtend(AssemblyType, AssemblyType, Operand, Operand),
+    MovZeroExtend(AssemblyType, AssemblyType, Operand, Operand),
     Unary(UnaryOperator, AssemblyType, Operand),
     Binary(BinaryOperator, AssemblyType, Operand, Operand),
     Idiv(AssemblyType, Operand),
@@ -19,7 +21,6 @@ pub enum Instruction {
     Push(Operand),
     DeallocateStack(i32),
     AllocateStack(i32),
-    SignExtend(Operand, Operand),
     Cvttsdsi(AssemblyType, Operand, Operand),
     Cvtsi2sd(AssemblyType, Operand, Operand),
     Lea(Operand, Operand),
@@ -62,6 +63,8 @@ pub enum Operand {
     ImmediateI64(i64),
     ImmediateU32(u32),
     ImmediateU64(u64),
+    ImmediateI8(i8),
+    ImmediateU8(u8),
     // ImmediateF64(f64),
     Pseudo(String),
     Memory(Register, i32),
@@ -69,7 +72,7 @@ pub enum Operand {
     PseudoMem(String, usize, usize, usize), // name, size, offset, alignment
     Indexed(Register, Register, usize),
 }
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Register {
     RAX,
     RDX,
@@ -78,7 +81,7 @@ pub enum Register {
     R9,
     R10,
     R11,
-    CL,
+    //CL,
     RBP,
     XMM0,
     XMM1,

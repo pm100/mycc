@@ -1,20 +1,80 @@
+//use std::{fmt::Pointer, intrinsics::const_eval_select, string};
+
 use crate::{
     lexer::Token,
     parser::Parser,
     symbols::SymbolType,
-    tacky::{BinaryOperator, Instruction, PendingResult, UnaryOperator, Value},
+    tacky::{BinaryOperator, Instruction, PendingResult, StaticInit, UnaryOperator, Value},
 };
 use anyhow::{bail, Result};
+use backtrace::Symbol;
 //use backtrace::Symbol;
-
+#[derive(Debug, Clone, PartialEq)]
+pub enum StringLiteralMode {
+    InitStatic,
+    InitAuto,
+    Expr,
+}
 impl Parser {
     pub(crate) fn do_rvalue_expression(&mut self) -> Result<Value> {
-        let expr = self.do_expression(0)?;
+        self.static_init = false;
+        let expr = self.do_expression(0, &StringLiteralMode::Expr)?;
         println!("do_rvalue_expression {:?}", expr);
         self.make_rvalue(&expr)
     }
-    fn do_expression(&mut self, min_prec: i32) -> Result<PendingResult> {
-        let mut left = self.do_unary()?;
+
+    // entry point called when parsingf initializers
+    // strings get treated differently in init vs expr cases
+
+    pub fn do_init_expression(&mut self, is_auto: bool, stype: &SymbolType) -> Result<Value> {
+        self.static_init = !is_auto;
+        let expr = self.do_expression(0, &StringLiteralMode::InitStatic)?;
+        println!("make_init_rvalue {:?}", expr);
+        let ret = match &expr {
+            PendingResult::Dereference(var) => {
+                assert!(var.is_pointer(), "Expected pointer, got {:?}", var);
+                let ptype = Self::get_type(&var);
+                let stype = Self::get_pointee_type(&ptype)?;
+                let deref_dest = match stype {
+                    SymbolType::Array(t, _) => {
+                        let name = var.as_variable().unwrap().0.clone();
+                        let dest = Value::Variable(name, SymbolType::Pointer(t));
+                        dest.clone()
+                    }
+                    _ => {
+                        let dest = self.make_temporary(&stype);
+                        self.instruction(Instruction::Load(var.clone(), dest.clone()));
+                        dest
+                    }
+                };
+                println!("dereferenced {:?}->{:?}", expr.clone(), deref_dest);
+                deref_dest
+            }
+            PendingResult::PlainValue(var) => var.clone(),
+        };
+
+        if ret.is_string() {
+            if stype.is_pointer() && !self.static_init {
+                return Ok(self.array_to_pointer(&ret)?);
+            }
+            if stype.is_array() {
+                return Ok(ret);
+            }
+        }
+        Ok(ret)
+        // let ret = if !ret.is_string() || !self.static_init {
+        //     self.array_to_pointer(&ret.clone())?
+        // } else {
+        //     ret.clone()
+        // };
+        // Ok(ret)
+    }
+    fn do_expression(
+        &mut self,
+        min_prec: i32,
+        string_mode: &StringLiteralMode,
+    ) -> Result<PendingResult> {
+        let mut left = self.do_unary(string_mode)?;
 
         loop {
             let token = self.peek()?;
@@ -39,7 +99,7 @@ impl Parser {
                 | Token::RemainderEquals => {
                     self.next_token()?;
 
-                    let right = self.do_expression(Self::precedence(&token))?;
+                    let right = self.do_expression(Self::precedence(&token), string_mode)?;
                     let right_rv = self.make_rvalue(&right)?;
                     match token {
                         // simple assignment
@@ -48,7 +108,7 @@ impl Parser {
 
                             // ensure we do not return an lvalue
 
-                            let result_type = Self::get_type(&result);
+                            let result_type = result.stype();
                             let not_lvalue = self.make_temporary(&result_type);
                             self.instruction(Instruction::Copy(result, not_lvalue.clone()));
 
@@ -68,7 +128,7 @@ impl Parser {
                     let label_false = self.make_label("and_false");
                     let label_end = self.make_label("and_end");
                     self.instruction(Instruction::JumpIfZero(left_rv, label_false.clone()));
-                    let right = self.do_expression(Self::precedence(&token) + 1)?;
+                    let right = self.do_expression(Self::precedence(&token) + 1, string_mode)?;
                     let right = self.make_rvalue(&right)?;
                     self.instruction(Instruction::JumpIfZero(right, label_false.clone()));
 
@@ -86,7 +146,7 @@ impl Parser {
                     let label_true = self.make_label("or_true");
                     let label_end = self.make_label("or_end");
                     self.instruction(Instruction::JumpIfNotZero(left_rv, label_true.clone()));
-                    let right = self.do_expression(Self::precedence(&token) + 1)?;
+                    let right = self.do_expression(Self::precedence(&token) + 1, string_mode)?;
                     let right = self.make_rvalue(&right)?;
                     self.instruction(Instruction::JumpIfNotZero(right, label_true.clone()));
 
@@ -108,7 +168,7 @@ impl Parser {
                     self.instruction(Instruction::JumpIfZero(condition, false_label.clone()));
 
                     //true
-                    let true_exp = self.do_expression(0)?;
+                    let true_exp = self.do_expression(0, string_mode)?;
                     let true_exp = self.make_rvalue(&true_exp)?;
                     let mut result = self.make_temporary(&Self::get_type(&true_exp));
                     self.instruction(Instruction::Copy(true_exp.clone(), result.clone()));
@@ -117,7 +177,7 @@ impl Parser {
                     // false
                     self.instruction(Instruction::Label(false_label.clone()));
                     self.expect(Token::Colon)?;
-                    let false_exp = self.do_expression(Self::precedence(&token))?;
+                    let false_exp = self.do_expression(Self::precedence(&token), string_mode)?;
                     let false_exp = self.make_rvalue(&false_exp)?;
                     if Self::get_type(&false_exp) != Self::get_type(&true_exp) {
                         let common_type = Self::get_common_type(
@@ -141,19 +201,26 @@ impl Parser {
                 }
                 _ => {
                     let op = self.convert_binop()?;
-                    let left_rv = self.make_rvalue(&left)?;
+                    let left_rv = if left.is_string() && false {
+                        self.string_to_pointer_rv(&left)?
+                    } else {
+                        self.make_rvalue(&left)?
+                    };
+                    //if left_rv.is_string() {
+                    //     self.array_to_pointer(value)
+                    // }
                     let left_type = Self::get_type(&left_rv);
 
-                    let right = self.do_expression(Self::precedence(&token) + 1)?;
+                    let right = self.do_expression(Self::precedence(&token) + 1, string_mode)?;
                     let right = self.make_rvalue(&right)?;
                     let right_type = Self::get_type(&right);
                     self.check_binary_allowed(&op, &left_type, &right_type)?;
 
                     // lets special case pointer arithmetic immediately
                     if (op == BinaryOperator::Add || op == BinaryOperator::Subtract)
-                        && (left_rv.is_pointer() || right.is_pointer())
+                        && (left_type.is_pointer() || right_type.is_pointer())
                     {
-                        if left_rv.is_pointer() && right.is_pointer() {
+                        if left_type.is_pointer() && right_type.is_pointer() {
                             let left_pointee = Self::get_pointee_type(&left_type)?;
                             if left_pointee != Self::get_pointee_type(&Self::get_type(&right))? {
                                 bail!(
@@ -184,40 +251,21 @@ impl Parser {
                             ));
                             res
                         } else {
-                            let (pointer, delta) = if left_rv.is_pointer() {
+                            let (pointer, delta) = if left_type.is_pointer() {
                                 (left_rv, right)
                             } else {
                                 (right, left_rv)
                             };
                             self.do_pointer_arithmetic(&op, &pointer, &delta)?
-                            // let delta = self.convert_to(&delta, &SymbolType::Int64, true)?;
-                            // let delta = if op == BinaryOperator::Subtract {
-                            //     if let Value::Int64(v) = delta {
-                            //         Value::Int64(-v)
-                            //     } else {
-                            //         let new_delta = self.make_temporary(&SymbolType::Int64);
-                            //         self.instruction(Instruction::Unary(
-                            //             UnaryOperator::Negate,
-                            //             delta.clone(),
-                            //             new_delta.clone(),
-                            //         ));
-                            //         new_delta
-                            //     }
-                            // } else {
-                            //     delta
-                            // };
-                            // let ptype = &Self::get_type(&pointer);
-                            // let dest = self.make_temporary(ptype);
-                            // let pointed_type = Self::get_pointee_type(ptype)?;
-
-                            // let elem_size = Self::get_total_object_size(&pointed_type)? as isize;
-                            // let inst = Instruction::AddPtr(pointer, delta, elem_size, dest.clone());
-                            // self.instruction(inst);
-                            //dest
                         }
                     } else if op == BinaryOperator::ShiftLeft || op == BinaryOperator::ShiftRight {
-                        let dest = self.make_temporary(&left_type.clone());
-                        self.instruction(Instruction::Binary(op, left_rv, right, dest.clone()));
+                        let promo = if left_type.is_character() {
+                            self.convert_to(&left_rv, &SymbolType::Int32, true)?
+                        } else {
+                            left_rv.clone()
+                        };
+                        let dest = self.make_temporary(&promo.stype());
+                        self.instruction(Instruction::Binary(op, promo, right, dest.clone()));
                         dest
                     } else {
                         let common_type =
@@ -259,6 +307,14 @@ impl Parser {
         delta: &Value,
     ) -> Result<Value> {
         assert!(matches!(op, BinaryOperator::Add | BinaryOperator::Subtract));
+        let pointer = if pointer.is_string() {
+            if self.static_init {
+                bail!("constant only here");
+            }
+            self.string_to_pointer(pointer)?
+        } else {
+            pointer.clone()
+        };
         assert!(pointer.is_pointer());
         let delta = if *op == BinaryOperator::Subtract {
             match delta {
@@ -282,8 +338,9 @@ impl Parser {
             self.convert_to(delta, &SymbolType::Int64, true)?
         };
         assert!(Self::get_type(&delta) == SymbolType::Int64);
-        let size = Self::get_total_object_size(&Self::get_pointee_type(&Self::get_type(pointer))?)?;
-        let update = self.make_temporary(&Self::get_type(pointer));
+        let size =
+            Self::get_total_object_size(&Self::get_pointee_type(&Self::get_type(&pointer))?)?;
+        let update = self.make_temporary(&Self::get_type(&pointer));
         self.instruction(Instruction::AddPtr(
             pointer.clone(),
             delta.clone(),
@@ -357,6 +414,13 @@ impl Parser {
         if Self::is_arithmetic(&vtype) && Self::is_arithmetic(target_type) {
             return self.convert_to(value, target_type, false);
         }
+        if target_type.is_pointer()
+            && vtype.is_array()
+            && Self::get_inner_type(target_type)? == Self::get_inner_type(&vtype)?
+        {
+            // array to pointer decay
+            return self.array_to_pointer(value);
+        }
         if target_type.is_pointer() && Self::is_null_pointer_constant(value) {
             return Ok(Value::UInt64(0));
         }
@@ -370,12 +434,18 @@ impl Parser {
             Value::UInt32(_) => SymbolType::UInt32,
             Value::UInt64(_) => SymbolType::UInt64,
             Value::Double(_) => SymbolType::Double,
+            Value::Char(_) => SymbolType::Char,
+            Value::UChar(_) => SymbolType::UChar,
+            // Value::String(s) => SymbolType::Array(Box::new(SymbolType::Char), s.len() + 1),
+            Value::String(_) => SymbolType::Pointer(Box::new(SymbolType::Char)),
             Value::Variable(_, t) => t.clone(),
+            _ => todo!(),
         }
     }
     pub fn is_signed(symbol: &SymbolType) -> bool {
         match symbol {
             SymbolType::Int32 | SymbolType::Int64 => true,
+            SymbolType::Char | SymbolType::SChar => true,
             SymbolType::UInt32 | SymbolType::UInt64 => false,
             _ => false,
         }
@@ -387,6 +457,9 @@ impl Parser {
             SymbolType::Double => 8,
             SymbolType::Function(_, _) => 8,
             SymbolType::Pointer(_) => 8,
+            SymbolType::Char => 1,
+            SymbolType::UChar => 1,
+            SymbolType::SChar => 1,
             SymbolType::Array(t, _) => Self::get_total_object_size(t).unwrap(),
         }
     }
@@ -410,6 +483,16 @@ impl Parser {
     }
 
     fn get_common_type(a: &SymbolType, b: &SymbolType) -> Result<SymbolType> {
+        let a = if a.is_character() {
+            &SymbolType::Int32
+        } else {
+            a
+        };
+        let b = if b.is_character() {
+            &SymbolType::Int32
+        } else {
+            b
+        };
         if a == b {
             return Ok(a.clone());
         }
@@ -436,12 +519,22 @@ impl Parser {
         explicit_cast: bool,
     ) -> Result<Value> {
         println!("convert {:?} to {:?}", value, target_type);
-        let vtype = Self::get_type(value);
+        // let value = if value.is_constant() && value.stype().is_character() {
+        //     match value {
+        //         Value::Char(v) => Value::Int32(*v as i32),
+        //         Value::UChar(v) => Value::Int32(*v as i32),
+        //         _ => unreachable!(),
+        //     }
+        // } else {
+        //     value.clone()
+        // };
+        let vtype = Self::get_type(&value);
+
         let return_value = if vtype == *target_type {
             // easy case
             value.clone()
         } else {
-            match (value, target_type) {
+            match (&value, target_type) {
                 // arithmetic immediates
                 // TODO - would be simpler if XIntXX was always i128
                 (Value::Int32(v), SymbolType::Int64) => Value::Int64(*v as i64),
@@ -464,6 +557,39 @@ impl Parser {
                 (Value::Double(v), SymbolType::Int64) => Value::Int64(*v as i64),
                 (Value::Double(v), SymbolType::UInt32) => Value::UInt32(*v as u32),
                 (Value::Double(v), SymbolType::UInt64) => Value::UInt64(*v as u64),
+                (Value::Double(v), SymbolType::Char) => Value::Char(*v as i8),
+                (Value::Double(v), SymbolType::UChar) => Value::UChar(*v as u8),
+                (Value::Double(v), SymbolType::SChar) => Value::Char(*v as i8),
+                (Value::Int32(v), SymbolType::SChar) => Value::Char(*v as i8),
+                (Value::Int32(v), SymbolType::Char) => Value::Char(*v as i8),
+                (Value::Int32(v), SymbolType::UChar) => Value::UChar(*v as u8),
+                (Value::UInt32(v), SymbolType::Char) => Value::Char(*v as i8),
+                (Value::UInt32(v), SymbolType::SChar) => Value::Char(*v as i8),
+                (Value::UInt32(v), SymbolType::UChar) => Value::UChar(*v as u8),
+                (Value::Int64(v), SymbolType::SChar) => Value::Char(*v as i8),
+                (Value::Int64(v), SymbolType::Char) => Value::Char(*v as i8),
+                (Value::Int64(v), SymbolType::UChar) => Value::UChar(*v as u8),
+                (Value::UInt64(v), SymbolType::SChar) => Value::Char(*v as i8),
+                (Value::UInt64(v), SymbolType::Char) => Value::Char(*v as i8),
+                (Value::UInt64(v), SymbolType::UChar) => Value::UChar(*v as u8),
+                (Value::Char(v), SymbolType::SChar) => Value::Char(*v),
+                (Value::Char(v), SymbolType::UChar) => Value::UChar(*v as u8),
+                (Value::Char(_), _) => bail!("Cannot convert char to integer type"),
+                // (Value::Char(v), SymbolType::SChar) => Value::Char(*v as i8),
+                // (Value::Char(v), SymbolType::UChar) => Value::UChar(*v as u8),
+                // (Value::Char(v), SymbolType::Int32) => Value::Int32(*v as i32),
+                // (Value::Char(v), SymbolType::Int64) => Value::Int64(*v as i64),
+                // (Value::Char(v), SymbolType::UInt32) => Value::UInt32(*v as u32),
+                // (Value::Char(v), SymbolType::UInt64) => Value::UInt64(*v as u64),
+                // (Value::Char(v), SymbolType::Double) => Value::Double(*v as f64),
+                // (Value::UChar(v), SymbolType::SChar) => Value::Char(*v as i8),
+                // (Value::UChar(v), SymbolType::Char) => Value::Char(*v as i8),
+                // (Value::UChar(v), SymbolType::Int32) => Value::Int32(*v as i32),
+                // (Value::UChar(v), SymbolType::Int64) => Value::Int64(*v as i64),
+                // (Value::UChar(v), SymbolType::UInt32) => Value::UInt32(*v as u32),
+                // (Value::UChar(v), SymbolType::UInt64) => Value::UInt64(*v as u64),
+                // (Value::UChar(v), SymbolType::Double) => Value::Double(*v as f64),
+
                 // null pointer conversion
                 (
                     Value::UInt64(0) | Value::Int64(0) | Value::Int32(0) | Value::UInt32(0),
@@ -477,6 +603,7 @@ impl Parser {
                 // variables
                 _ => {
                     let dest = self.make_temporary(target_type);
+                    assert!(!value.is_string());
                     match (&vtype, target_type) {
                         (SymbolType::Pointer(_), SymbolType::Pointer(_)) => {
                             if !explicit_cast {
@@ -499,7 +626,7 @@ impl Parser {
                                 8 => {
                                     self.instruction(Instruction::Copy(value.clone(), dest.clone()))
                                 }
-                                4 => self.instruction(Instruction::Truncate(
+                                4 | 1 => self.instruction(Instruction::Truncate(
                                     value.clone(),
                                     dest.clone(),
                                 )),
@@ -519,7 +646,7 @@ impl Parser {
                                 8 => {
                                     self.instruction(Instruction::Copy(value.clone(), dest.clone()))
                                 }
-                                4 => self.instruction(Instruction::ZeroExtend(
+                                4 | 1 => self.instruction(Instruction::ZeroExtend(
                                     value.clone(),
                                     dest.clone(),
                                 )),
@@ -555,6 +682,19 @@ impl Parser {
                             }
                         }
                         _ => {
+                            // if vtype.is_char() || vtype.is_s_char() {
+                            //     // convert char to int
+                            //     self.instruction(Instruction::SignExtend(
+                            //         value.clone(),
+                            //         dest.clone(),
+                            //     ));
+                            // } else if vtype.is_u_char() {
+                            //     // convert u_char to int
+                            //     self.instruction(Instruction::ZeroExtend(
+                            //         value.clone(),
+                            //         dest.clone(),
+                            //     ))
+                            // } else {
                             let tsize = Self::get_size_of_stype(target_type);
                             let vsize = Self::get_size_of_stype(&vtype);
                             if tsize == vsize {
@@ -576,6 +716,7 @@ impl Parser {
                                     dest.clone(),
                                 ));
                             }
+                            //}
                         }
                     };
                     dest.clone()
@@ -618,7 +759,14 @@ impl Parser {
         }
     }
     fn array_to_pointer(&mut self, value: &Value) -> Result<Value> {
-        let vtype = Self::get_type(value);
+        let (value, vtype) = if value.is_string() {
+            let sname = self.make_static_string(value)?;
+            let stype = SymbolType::Array(Box::new(SymbolType::Char), 0);
+            (Value::Variable(sname, stype.clone()), stype)
+        } else {
+            (value.clone(), Self::get_type(&value))
+        };
+        //let vtype = Self::get_type(&value);
         println!("array_to_pointer {:?} {:?}", value, vtype);
         if let SymbolType::Array(stype, _size) = vtype {
             let dest = self.make_temporary(&SymbolType::Pointer(Box::new(*stype)));
@@ -627,6 +775,33 @@ impl Parser {
         } else {
             Ok(value.clone())
         }
+    }
+
+    pub fn string_to_pointer_rv(&mut self, value: &PendingResult) -> Result<Value> {
+        println!("string_to_pointer_rv {:?}", value);
+        let value = self.make_rvalue(value)?;
+        let str = value.as_string().unwrap();
+        let sname = self.make_static_string(&value)?;
+        let stype = SymbolType::Array(Box::new(SymbolType::Char), str.len() + 1);
+        let dest = self.make_temporary(&SymbolType::Pointer(Box::new(SymbolType::Char)));
+        self.instruction(Instruction::GetAddress(
+            Value::Variable(sname, stype),
+            dest.clone(),
+        ));
+        Ok(dest)
+    }
+    pub fn string_to_pointer(&mut self, value: &Value) -> Result<Value> {
+        println!("string_to_pointer {:?}", value);
+        //let value = self.make_rvalue(value)?;
+        let str = value.as_string().unwrap();
+        let sname = self.make_static_string(&value)?;
+        let stype = SymbolType::Array(Box::new(SymbolType::Char), str.len() + 1);
+        let dest = self.make_temporary(&SymbolType::Pointer(Box::new(SymbolType::Char)));
+        self.instruction(Instruction::GetAddress(
+            Value::Variable(sname, stype),
+            dest.clone(),
+        ));
+        Ok(dest)
     }
     fn make_rvalue(&mut self, value: &PendingResult) -> Result<Value> {
         println!("make_rvalue {:?}", value);
@@ -643,7 +818,6 @@ impl Parser {
                     }
                     _ => {
                         let dest = self.make_temporary(&stype);
-
                         self.instruction(Instruction::Load(var.clone(), dest.clone()));
                         dest
                     }
@@ -653,11 +827,15 @@ impl Parser {
             }
             PendingResult::PlainValue(var) => var.clone(),
         };
-        let ret = self.array_to_pointer(&ret.clone())?;
-        Ok(ret.clone())
+        let ret = if !ret.is_string() || !self.static_init {
+            self.array_to_pointer(&ret.clone())?
+        } else {
+            ret.clone()
+        };
+        Ok(ret)
     }
 
-    fn do_unary(&mut self) -> Result<PendingResult> {
+    fn do_unary(&mut self, string_mode: &StringLiteralMode) -> Result<PendingResult> {
         /*
            <unary-exp> ::= <unop> <unary-exp>
                            | "(" { <type-specifier> }+ [ <abstract-declarator> ] ")" <unary-exp>
@@ -671,7 +849,7 @@ impl Parser {
             //
             Token::PlusPlus | Token::MinusMinus => {
                 self.next_token()?;
-                let source = self.do_unary()?;
+                let source = self.do_unary(string_mode)?;
 
                 let op = if token == Token::PlusPlus {
                     BinaryOperator::Add
@@ -687,6 +865,9 @@ impl Parser {
                     SymbolType::UInt64 => Value::UInt64(1),
                     SymbolType::Double => Value::Double(1.0),
                     SymbolType::Pointer(_) => Value::Int64(1),
+                    SymbolType::Char => Value::Char(1),
+                    SymbolType::UChar => Value::UChar(1),
+                    SymbolType::SChar => Value::Char(1),
                     _ => bail!("Cannot use ++ or -- on {:?}", source),
                 };
                 let update = if source_rv.is_pointer() {
@@ -706,11 +887,16 @@ impl Parser {
             }
             Token::Negate => {
                 self.next_token()?;
-                let source = self.do_unary()?;
+                let source = self.do_unary(string_mode)?;
                 let source = self.make_rvalue(&source)?;
                 if source.is_pointer() {
-                    bail!("Cannot use ~ on pointer type");
+                    bail!("Cannot use ! on pointer type");
                 }
+                let source = if source.stype().is_character() {
+                    self.convert_to(&source, &SymbolType::Int32, true)?
+                } else {
+                    source
+                };
                 let ret_dest = self.make_temporary(&Self::get_type(&source));
                 let unop =
                     Instruction::Unary(UnaryOperator::Negate, source.clone(), ret_dest.clone());
@@ -720,11 +906,16 @@ impl Parser {
 
             Token::Complement => {
                 self.next_token()?;
-                let source = self.do_unary()?;
+                let source = self.do_unary(string_mode)?;
                 let source = self.make_rvalue(&source)?;
                 if source.is_double() || source.is_pointer() {
                     bail!("Cannot use ~ on double or pointer type");
                 }
+                let source = if source.stype().is_character() {
+                    self.convert_to(&source, &SymbolType::Int32, true)?
+                } else {
+                    source
+                };
                 let ret_dest = self.make_temporary(&Self::get_type(&source));
                 let unop =
                     Instruction::Unary(UnaryOperator::Complement, source.clone(), ret_dest.clone());
@@ -733,7 +924,7 @@ impl Parser {
             }
             Token::Not => {
                 self.next_token()?;
-                let source = self.do_unary()?;
+                let source = self.do_unary(string_mode)?;
                 let source = self.make_rvalue(&source)?;
                 let ret_dest = self.make_temporary(&SymbolType::Int32);
                 let unop = Instruction::Unary(UnaryOperator::LogicalNot, source, ret_dest.clone());
@@ -743,25 +934,48 @@ impl Parser {
             // &  = address of
             Token::BitwiseAnd => {
                 self.next_token()?;
-                let source = self.do_unary()?;
+                let source = self.do_unary(string_mode)?;
                 println!("address of {:?}", source);
                 match &source {
                     PendingResult::Dereference(v) => PendingResult::PlainValue(v.clone()),
                     PendingResult::PlainValue(v) => {
-                        if !self.is_lvalue(v) {
-                            bail!("not lvalue {:?}", v);
+                        if v.is_string() {
+                            // string literal - return the pointer
+                            let str = v.as_string().unwrap();
+                            let name = format!("string${}", self.tacky.static_constants.len());
+                            let arr_type =
+                                SymbolType::Array(Box::new(SymbolType::Char), str.len() + 1);
+                            self.tacky.add_static_constant(
+                                &name,
+                                vec![StaticInit::InitString(str.clone(), true)],
+                                false,
+                                false,
+                                &arr_type,
+                            );
+                            //let stype = SymbolType::Pointer(Box::new(SymbolType::Char));
+                            let dest = self
+                                .make_temporary(&SymbolType::Pointer(Box::new(arr_type.clone())));
+                            self.instruction(Instruction::GetAddress(
+                                Value::Variable(name, arr_type),
+                                dest.clone(),
+                            ));
+                            PendingResult::PlainValue(dest)
+                        } else {
+                            if !self.is_lvalue(v) {
+                                bail!("not lvalue {:?}", v);
+                            }
+                            let ret_dest = self
+                                .make_temporary(&SymbolType::Pointer(Box::new(Self::get_type(v))));
+                            self.instruction(Instruction::GetAddress(v.clone(), ret_dest.clone()));
+                            PendingResult::PlainValue(ret_dest)
                         }
-                        let ret_dest =
-                            self.make_temporary(&SymbolType::Pointer(Box::new(Self::get_type(v))));
-                        self.instruction(Instruction::GetAddress(v.clone(), ret_dest.clone()));
-                        PendingResult::PlainValue(ret_dest)
                     }
                 }
             }
             // * = dereference
             Token::Multiply => {
                 self.next_token()?;
-                let source = self.do_unary()?;
+                let source = self.do_unary(string_mode)?;
                 let source = self.make_rvalue(&source)?;
                 if !source.is_pointer() {
                     bail!("Expected pointer, got {:?}", source);
@@ -773,7 +987,12 @@ impl Parser {
             Token::LeftParen
                 if matches!(
                     self.peek_n(1)?,
-                    Token::Int | Token::Double | Token::Signed | Token::Unsigned | Token::Long
+                    Token::Int
+                        | Token::Double
+                        | Token::Signed
+                        | Token::Unsigned
+                        | Token::Long
+                        | Token::Char
                 ) =>
             {
                 self.next_token()?;
@@ -794,7 +1013,7 @@ impl Parser {
                     abs
                 };
                 self.expect(Token::RightParen)?;
-                let source = self.do_unary()?;
+                let source = self.do_unary(string_mode)?;
                 let source = self.make_rvalue(&source)?;
 
                 let ret_dest = self.make_temporary(&target_type);
@@ -802,52 +1021,50 @@ impl Parser {
                 self.instruction(Instruction::Copy(converted, ret_dest.clone()));
                 PendingResult::PlainValue(ret_dest)
             }
-            _ => self.do_postfix()?,
+            _ => self.do_postfix(string_mode)?,
         };
         Ok(ret_val)
     }
-    fn process_index(&mut self, primary: &PendingResult) -> Result<PendingResult> {
+    fn process_index(
+        &mut self,
+        primary: &PendingResult,
+        string_mode: &StringLiteralMode,
+    ) -> Result<PendingResult> {
         let token = self.peek()?;
         if token != Token::LeftBracket {
-            println!("++++no index:");
             return Ok(primary.clone());
         }
         self.next_token()?;
 
         // read the index value
-        let index = self.do_expression(0)?;
+        let index = self.do_expression(0, string_mode)?;
         let index_rv = self.make_rvalue(&index)?;
 
         let ptr_rv = self.make_rvalue(primary)?;
 
         // we have a pointer and an index, lets get them the right way round
-
-        let (ptr, index) = if primary.is_pointer() {
+        let (ptr, index) = if ptr_rv.is_pointer() {
             (ptr_rv, index_rv)
         } else {
             let ptr = self.make_rvalue(&index)?;
-
             (ptr, ptr_rv)
         };
+        println!("index {:?} {:?} {:?}", index, ptr, primary);
         if !Self::is_integer(&Self::get_type(&index)) {
-            bail!("Expected integer, got {:?}", index);
+            bail!("Expected integeryyy, got {:?}", index);
         }
         if !ptr.is_pointer() {
-            bail!("Expected pointer, got {:?}", primary);
+            bail!("Expected pointer, got {:?}", ptr);
         }
 
         let index = self.convert_to(&index, &SymbolType::Int64, true)?;
         self.expect(Token::RightBracket)?;
-        // go it
 
         let ptype = Self::get_type(&ptr);
         let stype = Self::get_pointee_type(&ptype)?;
         let dest = self.make_temporary(&ptype);
         let elem_size = Self::get_total_object_size(&stype)? as isize;
-        println!(
-            "pointer: {:?} pointed_type: {:?} elsize={}",
-            ptr, stype, elem_size
-        );
+
         self.instruction(Instruction::AddPtr(
             ptr.clone(),
             index,
@@ -855,21 +1072,21 @@ impl Parser {
             dest.clone(),
         ));
         let idx_res = PendingResult::Dereference(dest.clone());
-        let next_idx = self.process_index(&idx_res)?;
+        let next_idx = self.process_index(&idx_res, string_mode)?;
         Ok(next_idx)
     }
 
-    fn do_postfix(&mut self) -> Result<PendingResult> {
+    fn do_postfix(&mut self, string_mode: &StringLiteralMode) -> Result<PendingResult> {
         /*
 
         <postfix-exp> ::= <primary-exp> {postfixop}
         <postfixop> = "++" | "--" | "[" <exp> "]"
         */
-        let mut primary = self.do_primary()?;
+        let mut primary = self.do_primary(string_mode)?;
         loop {
             let token = self.peek()?;
             match token {
-                Token::LeftBracket => primary = self.process_index(&primary)?,
+                Token::LeftBracket => primary = self.process_index(&primary, string_mode)?,
                 Token::PlusPlus | Token::MinusMinus => {
                     primary = self.do_post_dec_inc(&primary)?;
                 }
@@ -905,6 +1122,9 @@ impl Parser {
             SymbolType::UInt64 => Value::UInt64(1),
             SymbolType::Double => Value::Double(1.0),
             SymbolType::Pointer(_) => Value::UInt64(1),
+            SymbolType::Char => Value::Char(1),
+            SymbolType::UChar => Value::UChar(1),
+            SymbolType::SChar => Value::Char(1),
             _ => bail!("Cannot use ++ or -- on {:?}", primary_rv),
         };
         //   self.check_binary_allowed(&op, &Self::get_type(&primary_rv), &Self::get_type(&inc_val))?;
@@ -925,7 +1145,7 @@ impl Parser {
         self.store_into_lvalue(&update, primary)?;
         Ok(PendingResult::PlainValue(ret_dest))
     }
-    fn do_primary(&mut self) -> Result<PendingResult> {
+    fn do_primary(&mut self, string_mode: &StringLiteralMode) -> Result<PendingResult> {
         /*
         <primary-exp> ::= <const>
                         | <identifier>
@@ -955,8 +1175,59 @@ impl Parser {
                 println!("val: {}", val);
                 PendingResult::PlainValue(Value::Double(val))
             }
+            Token::CharConstant(val) => {
+                println!("val: {}", val);
+                PendingResult::PlainValue(Value::Int32(val as i32))
+            }
+            Token::StringConstant(mut val) => {
+                loop {
+                    if let Token::StringConstant(append) = self.peek()? {
+                        self.next_token()?;
+                        val.push_str(&append);
+                    } else {
+                        break;
+                    }
+                }
+                // let val = if *string_mode == StringLiteralMode::Expr || false {
+                //     let sname = self.make_static_string(&Value::String(val.clone()))?;
+                //     //let arr_type = SymbolType::Array(Box::new(SymbolType::Char), val.len() + 1);
+                //     //let dest = self.make_temporary(&arr_type);
+                //     // self.instruction(Instruction::GetAddress(
+                //     //     Value::Variable(sname, SymbolType::Array(Box::new(SymbolType::Char), 0)),
+                //     //     dest.clone(),
+                //     // ));
+                //     Value::Variable(
+                //         sname,
+                //         SymbolType::Array(Box::new(SymbolType::Char), val.len() + 1),
+                //     )
+                // } else {
+                let val = Value::String(val);
+                //};
+                // let value = if *string_mode == StringLiteralMode::Expr {
+                //     let name = format!("string${}", self.tacky.static_constants.len());
+                //     self.tacky.add_static_constant(
+                //         &name,
+                //         vec![StaticInit::InitString(val.clone(), true)],
+                //         false,
+                //         false,
+                //         &SymbolType::Array(Box::new(SymbolType::Char), val.len() + 1),
+                //     );
+                //     let stype = SymbolType::Pointer(Box::new(SymbolType::Char));
+                //     let dest = self.make_temporary(&stype);
+                //     self.instruction(Instruction::GetAddress(
+                //         Value::Variable(name, SymbolType::Array(Box::new(SymbolType::Char), 0)),
+                //         dest.clone(),
+                //     ));
+                //     dest
+                // } else {
+                //     Value::String(val)
+                // };
+                println!("val: {:?}", val);
+
+                PendingResult::PlainValue(val)
+            }
             Token::LeftParen => {
-                let ret_dest = self.do_expression(0)?;
+                let ret_dest = self.do_expression(0, string_mode)?;
                 self.expect(Token::RightParen)?;
                 ret_dest
             }
@@ -989,10 +1260,16 @@ impl Parser {
                             break;
                         }
 
-                        let arg = self.do_expression(0)?;
+                        let arg = self.do_expression(0, string_mode)?;
                         let arg = self.make_rvalue(&arg)?;
 
-                        let converted_arg = self.convert_to(&arg, &symargs[argidx], false)?;
+                        let converted_arg = match arg.stype() {
+                            // SymbolType::Char | SymbolType::SChar => {
+                            //     self.convert_to(&arg, &SymbolType::Int32, true)?
+                            // }
+                            // SymbolType::UChar => self.convert_to(&arg, &SymbolType::Int32, true)?,
+                            _ => self.convert_to(&arg, &symargs[argidx], false)?,
+                        };
                         argidx += 1;
                         args.push(converted_arg);
                         let token = self.next_token()?;
