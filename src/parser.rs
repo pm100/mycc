@@ -1,4 +1,4 @@
-use crate::{declarator::indent, expr::StringLiteralMode, tacky::StaticInit};
+use crate::{declarator::indent, tacky::StaticInit};
 use anyhow::{bail, Result};
 use backtrace::{Backtrace, BacktraceFrame, BacktraceSymbol};
 use enum_as_inner::EnumAsInner;
@@ -44,9 +44,7 @@ pub struct Parser {
     current_function_name: String,
     in_function_body: bool,
     pub externs: HashMap<String, Extern>,
-    // pub string_mode: StringLiteralMode,
     pub static_init: bool,
-    // depth: usize,
 }
 #[derive(Debug, Clone, PartialEq, EnumAsInner)]
 enum Initializer {
@@ -74,9 +72,7 @@ impl Parser {
             current_function_name: String::new(),
             in_function_body: false,
             externs: HashMap::new(),
-            //  string_mode: StringLiteralMode::InitStatic,
             static_init: false,
-            // depth: 0,
         }
     }
 
@@ -723,18 +719,6 @@ impl Parser {
         self.expect(Token::SemiColon)?;
         Ok(())
     }
-    fn string_to_array(value: &Value) -> Initializer {
-        let init = if let Value::String(s) = value {
-            let chars = s
-                .chars()
-                .map(|ch| Initializer::SingleInit(Value::Char(ch as i8)))
-                .collect::<Vec<_>>();
-            Initializer::CompoundInit(chars)
-        } else {
-            Initializer::SingleInit(value.clone())
-        };
-        init
-    }
 
     pub fn make_static_string(&mut self, value: &Value) -> Result<String> {
         let str = value.as_string().unwrap().clone();
@@ -796,7 +780,7 @@ impl Parser {
                         }
                         if str.len() < *size {
                             self.instruction(Instruction::CopyToOffset(
-                                Value::Char(0 as i8),
+                                Value::Char(0_i8),
                                 Value::Variable(name.to_owned(), dest_type.clone()),
                                 offset,
                             ));
@@ -838,7 +822,7 @@ impl Parser {
                             bail!("String initializer too long")
                         }
                         for _ in str.len()..*size {
-                            res.push(StaticInit::InitChar(0 as i8));
+                            res.push(StaticInit::InitChar(0_i8));
                         }
                         res
                     }
@@ -853,7 +837,7 @@ impl Parser {
                     vec![converted]
                 }
             }
-            (true, Initializer::CompoundInit(ci)) => {
+            (true, Initializer::CompoundInit(_)) => {
                 //  {
                 //      int x[3] = {1,2,3};
                 //  }
@@ -894,7 +878,7 @@ impl Parser {
                 }
                 vec![]
             }
-            (false, Initializer::CompoundInit(ci)) => {
+            (false, Initializer::CompoundInit(_)) => {
                 // static int x[3] = {1,2,3};
 
                 if !dest_type.is_array() {
@@ -913,15 +897,12 @@ impl Parser {
                             bail!("variable is not char type");
                         }
                         let sname = self.make_static_string(&v)?;
-                        let ptr = StaticInit::PointerInit(sname);
-                        ptr
+                        StaticInit::PointerInit(sname)
+                    } else if dest_type.is_pointer() && Self::is_null_pointer_constant(&v) {
+                        StaticInit::InitU32(0)
                     } else {
-                        if dest_type.is_pointer() && Self::is_null_pointer_constant(&v) {
-                            StaticInit::InitU32(0)
-                        } else {
-                            let con = self.convert_by_assignment(&v, &elem_type)?;
-                            self.value_to_staticinit(&con)?
-                        }
+                        let con = self.convert_by_assignment(&v, &elem_type)?;
+                        self.value_to_staticinit(&con)?
                     };
                     values.push(converted);
                 }
@@ -937,8 +918,8 @@ impl Parser {
             Value::Int64(v) => Ok(StaticInit::InitI64(*v)),
             Value::UInt32(v) => Ok(StaticInit::InitU32(*v)),
             Value::UInt64(v) => Ok(StaticInit::InitU64(*v)),
-            Value::Char(v) => Ok(StaticInit::InitChar(*v as i8)),
-            Value::UChar(v) => Ok(StaticInit::InitUChar(*v as u8)),
+            Value::Char(v) => Ok(StaticInit::InitChar(*v)),
+            Value::UChar(v) => Ok(StaticInit::InitUChar(*v)),
             Value::String(s) => Ok(StaticInit::InitString(s.clone(), true)),
             Value::Double(v) => Ok(StaticInit::InitDouble(*v)),
             _ => bail!("Expected integer, got {:?}", value),
@@ -1037,11 +1018,9 @@ impl Parser {
                     bail!("Empty initializer list");
                 }
                 Ok(Initializer::CompoundInit(values))
-                //Ok(values)
             }
             _ => {
                 let val = self.do_init_expression(is_auto, stype)?;
-                // Ok(Self::string_to_array(&val))
                 Ok(Initializer::SingleInit(val))
             }
         }
@@ -1102,7 +1081,6 @@ impl Parser {
             let is_dec = self.do_function_or_variable(false, false)?;
             if is_dec {
             } else {
-                // bail!("Expected variable declaration or expression");
                 self.do_rvalue_expression()?;
                 self.expect(Token::SemiColon)?;
             }
@@ -1250,7 +1228,6 @@ impl Parser {
             .entry(label.clone())
             .and_modify(|l| {
                 if *l {
-                    // bail!("duplicate label");
                     dup = true;
                 }
                 *l = true
@@ -1380,13 +1357,6 @@ impl Parser {
         let next_drop_thru_label = self.make_label("next_drop_thru");
         let (switch_value, this_case_label, this_drop_thru_label) =
             if let Some(context) = self.switch_context_stack.last_mut() {
-                // check for duplicate case values
-                // if let Some(ref cv) = case_value {
-                //     if context.cases.contains(cv) {
-                //         bail!("Duplicate case value");
-                //     }
-                //     context.cases.push(cv.clone());
-                // }
                 context.before_first_case = false;
 
                 let this_case_label = context.next_case_label.clone();

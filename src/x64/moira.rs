@@ -2,10 +2,7 @@ use std::collections::HashMap;
 
 use anyhow::Result;
 
-use crate::{
-    symbols::SymbolType,
-    tacky::{StaticConstant, StaticInit, StaticVariable, Value},
-};
+use crate::tacky::{StaticConstant, StaticVariable};
 
 use super::moira_inst::Instruction;
 
@@ -22,20 +19,6 @@ pub struct Function {
     pub instructions: Vec<Instruction>,
     pub global: bool,
 }
-//#[derive(Debug, Clone)]
-// pub struct StaticVariable {
-//     pub name: String,
-//     pub values: Vec<Value>,
-//     pub global: bool,
-//     pub external: bool,
-//     pub stype: SymbolType,
-// }
-// #[derive(Debug, Clone)]
-// pub struct StaticConstant {
-//     pub name: String,
-//     pub align: u8,
-//     pub value: StaticInit,
-// }
 
 impl Default for MoiraProgram {
     fn default() -> Self {

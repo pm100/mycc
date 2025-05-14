@@ -466,63 +466,12 @@ impl Parser {
             specifiers.specified_type = Some(SymbolType::Int32);
             return Ok(specifiers);
         }
-        // if !signed && !unsigned && !int {
-        //     bail!("No type specified");
-        // }
         if signed || int {
             specifiers.specified_type = Some(SymbolType::Int32);
         }
         if unsigned {
             specifiers.specified_type = Some(SymbolType::UInt32);
         }
-        return Ok(specifiers);
-        //let stype =
-        // if double_count > 0 {
-        //     if long_count > 0 {
-        //         bail!("long and double cannot be used together");
-        //     }
-        //     if int_count > 0 {
-        //         bail!("int and double cannot be used together");
-        //     }
-        //     if signed_count > 0 {
-        //         bail!("signed and double cannot be used together");
-        //     }
-        //     if unsigned_count > 0 {
-        //         bail!("unsigned and double cannot be used together");
-        //     }
-        //     if char_count > 0 {
-        //         bail!("char and double cannot be used together");
-        //     }
-        //     specifiers.specified_type = Some(SymbolType::Double);
-        //     return Ok(specifiers);
-        // }
-        // if unsigned_count > 0 {
-        //     match (long_count, int_count) {
-        //         (0, 0) => specifiers.specified_type = Some(SymbolType::UInt32),
-        //         (1, 1) => specifiers.specified_type = Some(SymbolType::UInt32),
-        //         (1, 0) => specifiers.specified_type = Some(SymbolType::UInt32),
-        //         (2, 0) => specifiers.specified_type = Some(SymbolType::UInt64),
-        //         (2, 1) => specifiers.specified_type = Some(SymbolType::UInt64),
-        //         (0, 1) => specifiers.specified_type = Some(SymbolType::UInt32),
-        //         _ => bail!("Invalid type specifier"),
-        //     }
-        // } else {
-        //     match (long_count, int_count) {
-        //         (0, 0) => {
-        //             specifiers.specified_type = if signed_count > 0 {
-        //                 Some(SymbolType::Int32)
-        //             } else {
-        //                 None
-        //             }
-        //         }
-        //         (1, 1) => specifiers.specified_type = Some(SymbolType::Int32),
-        //         (1, 0) => specifiers.specified_type = Some(SymbolType::Int32),
-        //         (2, 0) => specifiers.specified_type = Some(SymbolType::Int64),
-        //         (2, 1) => specifiers.specified_type = Some(SymbolType::Int64),
-        //         (0, 1) => specifiers.specified_type = Some(SymbolType::Int32),
-        //         _ => bail!("Invalid type specifier"),
-        //     }
-        // }
-        //Ok(specifiers)
+        Ok(specifiers)
     }
 }

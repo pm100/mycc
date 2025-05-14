@@ -3,7 +3,7 @@ use crate::symbols::SymbolType;
 use crate::x64::moira::{Function, MoiraProgram};
 
 //use crate::codegen::MoiraCompiler;
-use crate::tacky::{StaticInit, Value};
+use crate::tacky::StaticInit;
 use anyhow::Result;
 use std::collections::HashMap;
 use std::io::Write;
@@ -416,13 +416,13 @@ impl X64CodeGenerator {
                 writeln!(writer, "        sub rsp, {}", size)?;
             }
             Instruction::MovSignExtend(src_at, dest_at, src, dest) => {
-                let src_str = self.get_operand(src, &src_at)?;
-                let dest_str = self.get_operand(dest, &dest_at)?;
+                let src_str = self.get_operand(src, src_at)?;
+                let dest_str = self.get_operand(dest, dest_at)?;
                 writeln!(writer, "        movsx {}, {}", dest_str, src_str)?;
             }
             Instruction::MovZeroExtend(src_at, dest_at, src, dest) => {
-                let src_str = self.get_operand(src, &src_at)?;
-                let dest_str = self.get_operand(dest, &dest_at)?;
+                let src_str = self.get_operand(src, src_at)?;
+                let dest_str = self.get_operand(dest, dest_at)?;
                 writeln!(writer, "        movzx {}, {}", dest_str, src_str)?;
             }
             Instruction::Cvttsdsi(assembly_type, src, dest) => {
@@ -488,54 +488,6 @@ impl X64CodeGenerator {
             (Register::R11, AssemblyType::Byte) => "r11b",
 
             _ => panic!("Invalid register or assembly type"),
-            // Register::RDX => if *assembly_type == AssemblyType::LongWord {
-            //     "edx"
-            // } else {
-            //     "rdx"
-            // }
-            // .to_string(),
-            // Register::RCX => if *assembly_type == AssemblyType::LongWord {
-            //     "ecx"
-            // } else {
-            //     "rcx"
-            // }
-            // .to_string(),
-            // Register::R8 => if *assembly_type == AssemblyType::LongWord {
-            //     "r8d"
-            // } else {
-            //     "r8"
-            // }
-            // .to_string(),
-            // Register::R9 => if *assembly_type == AssemblyType::LongWord {
-            //     "r9d"
-            // } else {
-            //     "r9"
-            // }
-            // .to_string(),
-            // Register::R10 => if *assembly_type == AssemblyType::LongWord {
-            //     "r10d"
-            // } else {
-            //     "r10"
-            // }
-            // .to_string(),
-            // Register::R11 => if *assembly_type == AssemblyType::LongWord {
-            //     "r11d"
-            // } else {
-            //     "r11"
-            // }
-            // .to_string(),
-            // Register::CL => "cl".to_string(),
-            // Register::XMM0 => "xmm0".to_string(),
-            // Register::XMM1 => "xmm1".to_string(),
-            // Register::XMM2 => "xmm2".to_string(),
-            // Register::XMM3 => "xmm3".to_string(),
-            // Register::XMM4 => "xmm4".to_string(),
-            // Register::XMM5 => "xmm5".to_string(),
-            // Register::XMM6 => "xmm6".to_string(),
-            // Register::XMM7 => "xmm7".to_string(),
-            // Register::XMM14 => "xmm14".to_string(),
-            // Register::XMM15 => "xmm15".to_string(),
-            // Register::RBP => "rbp".to_string(),
         };
         str.to_string()
     }
@@ -954,8 +906,8 @@ impl X64CodeGenerator {
                     new_instructions.push(Instruction::Call(name.clone()));
                 }
                 Instruction::MovSignExtend(src_at, dest_at, src, dest) => {
-                    let new_src = self.fix_pseudo(src, &src_at)?;
-                    let new_dest = self.fix_pseudo(dest, &dest_at)?;
+                    let new_src = self.fix_pseudo(src, src_at)?;
+                    let new_dest = self.fix_pseudo(dest, dest_at)?;
                     match (Self::is_constant(&new_src), Self::is_memory(&new_dest)) {
                         (false, false) => {
                             new_instructions.push(Instruction::MovSignExtend(
@@ -966,7 +918,7 @@ impl X64CodeGenerator {
                             ));
                         }
                         (false, true) => {
-                            let scratch = Self::get_scratch_register1(&dest_at);
+                            let scratch = Self::get_scratch_register1(dest_at);
 
                             new_instructions.push(Instruction::MovSignExtend(
                                 src_at.clone(),
@@ -981,8 +933,8 @@ impl X64CodeGenerator {
                             ));
                         }
                         (true, true) => {
-                            let scratch1 = Self::get_scratch_register1(&src_at);
-                            let scratch2 = Self::get_scratch_register2(&dest_at);
+                            let scratch1 = Self::get_scratch_register1(src_at);
+                            let scratch2 = Self::get_scratch_register2(dest_at);
                             new_instructions.push(Instruction::Mov(
                                 dest_at.clone(),
                                 new_src,
@@ -1001,7 +953,7 @@ impl X64CodeGenerator {
                             ));
                         }
                         (true, false) => {
-                            let scratch = Self::get_scratch_register1(&dest_at);
+                            let scratch = Self::get_scratch_register1(dest_at);
                             new_instructions.push(Instruction::Mov(
                                 src_at.clone(),
                                 new_src,
@@ -1017,8 +969,8 @@ impl X64CodeGenerator {
                     }
                 }
                 Instruction::MovZeroExtend(src_at, dest_at, src, dest) => {
-                    let new_src = self.fix_pseudo(src, &src_at)?;
-                    let new_dest = self.fix_pseudo(dest, &dest_at)?;
+                    let new_src = self.fix_pseudo(src, src_at)?;
+                    let new_dest = self.fix_pseudo(dest, dest_at)?;
                     match (Self::is_constant(&new_src), Self::is_memory(&new_dest)) {
                         (false, false) => {
                             if *src_at == AssemblyType::LongWord {
@@ -1037,7 +989,7 @@ impl X64CodeGenerator {
                             }
                         }
                         (false, true) => {
-                            let scratch = Self::get_scratch_register1(&dest_at);
+                            let scratch = Self::get_scratch_register1(dest_at);
 
                             if *src_at == AssemblyType::LongWord {
                                 new_instructions.push(Instruction::Mov(
@@ -1060,8 +1012,8 @@ impl X64CodeGenerator {
                             ));
                         }
                         (true, true) => {
-                            let scratch1 = Self::get_scratch_register1(&src_at);
-                            let scratch2 = Self::get_scratch_register2(&dest_at);
+                            let scratch1 = Self::get_scratch_register1(src_at);
+                            let scratch2 = Self::get_scratch_register2(dest_at);
                             new_instructions.push(Instruction::Mov(
                                 dest_at.clone(),
                                 new_src,
@@ -1080,7 +1032,7 @@ impl X64CodeGenerator {
                             ));
                         }
                         (true, false) => {
-                            let scratch = Self::get_scratch_register1(&dest_at);
+                            let scratch = Self::get_scratch_register1(dest_at);
                             new_instructions.push(Instruction::Mov(
                                 src_at.clone(),
                                 new_src,

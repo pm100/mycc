@@ -3,10 +3,7 @@ use std::collections::HashMap;
 use anyhow::{bail, Result};
 use enum_as_inner::EnumAsInner;
 
-use crate::{
-    parser::Parser,
-    tacky::{StaticInit, Value},
-};
+use crate::{parser::Parser, tacky::StaticInit};
 
 #[derive(Debug, Clone)]
 pub(crate) struct VariableName {
@@ -66,7 +63,7 @@ pub struct Extern {
 }
 impl SymbolType {
     pub fn is_integer(&self) -> bool {
-        Parser::is_integer(&self)
+        Parser::is_integer(self)
     }
     pub fn is_character(&self) -> bool {
         matches!(
@@ -142,7 +139,6 @@ impl Parser {
             let (idim, stype) = Self::get_array_count_and_type(&inner)?;
             Ok((idim * dim, stype))
         } else {
-            //let size = Self::get_size_of_stype(stype);
             Ok((1, stype.clone()))
         }
     }
@@ -171,7 +167,6 @@ impl Parser {
     }
     pub fn insert_global_symbol(&mut self, name: &str, symbol: Symbol) {
         println!("insert_global_symbol {:?}", symbol);
-        //   debug_assert!(!self.symbol_stack[0].contains_key(name));
         self.symbol_stack
             .get_mut(0)
             .unwrap()

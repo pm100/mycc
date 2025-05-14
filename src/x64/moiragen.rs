@@ -4,7 +4,7 @@ use crate::{
     codegen::BackEnd,
     parser::Parser,
     symbols::SymbolType,
-    tacky::{StaticConstant, StaticVariable, TackyProgram},
+    tacky::{StaticConstant, TackyProgram},
     x64::nasmgen::X64CodeGenerator,
 };
 use anyhow::Result;
@@ -398,7 +398,7 @@ impl X64BackEnd {
             }
             tacky::Instruction::IntToDouble(src, dest) => {
                 let (src, src_stype, src_assembly_type) = self.get_value(src);
-                let (dest, _dest_stype, dest_at) = self.get_value(dest);
+                let (dest, _dest_stype, _dest_at) = self.get_value(dest);
                 let (src, src_assembly_type) =
                     if matches!(src_stype, SymbolType::Char | SymbolType::SChar) {
                         let scratch =
@@ -665,7 +665,7 @@ impl X64BackEnd {
         if stype1.is_s_char() && stype2.is_char() {
             return true;
         }
-        return false;
+        false
     }
     fn gen_binary(
         &mut self,
@@ -900,13 +900,13 @@ impl X64BackEnd {
                 AssemblyType::QuadWord,
             ),
             tacky::Value::Char(value) => (
-                Operand::ImmediateI8(*value as i8),
+                Operand::ImmediateI8(*value),
                 SymbolType::Char,
                 AssemblyType::Byte,
             ),
             tacky::Value::String(_) => todo!(),
             tacky::Value::UChar(value) => (
-                Operand::ImmediateU8(*value as u8),
+                Operand::ImmediateU8(*value),
                 SymbolType::UChar,
                 AssemblyType::Byte,
             ),
