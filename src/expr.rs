@@ -7,7 +7,12 @@ use crate::{
 use anyhow::{bail, Result};
 //use backtrace::Symbol;
 //use backtrace::Symbol;
-
+pub enum VoidCastMode {
+    None,
+    From,
+    To,
+    Either,
+}
 impl Parser {
     pub(crate) fn do_rvalue_expression(&mut self) -> Result<Value> {
         self.static_init = false;
@@ -57,7 +62,8 @@ impl Parser {
         Ok(ret)
     }
     fn do_expression(&mut self, min_prec: i32) -> Result<PendingResult> {
-        let mut left = self.do_unary()?;
+        //let mut left = self.do_unary()?;
+        let mut left = self.parse_cast()?;
 
         loop {
             let token = self.peek()?;
@@ -149,35 +155,58 @@ impl Parser {
                     let false_label = self.make_label("ternary_false");
                     let condition = left_rv;
                     self.instruction(Instruction::JumpIfZero(condition, false_label.clone()));
-
+                    let mut result = Value::Void;
                     //true
                     let true_exp = self.do_expression(0)?;
                     let true_exp = self.make_rvalue(&true_exp)?;
-                    let mut result = self.make_temporary(&Self::get_type(&true_exp));
-                    self.instruction(Instruction::Copy(true_exp.clone(), result.clone()));
-                    self.instruction(Instruction::Jump(maybe_true_label.clone()));
+                    if !true_exp.is_void() {
+                        result = self.make_temporary(&Self::get_type(&true_exp));
+                        self.instruction(Instruction::Copy(true_exp.clone(), result.clone()));
+                        self.instruction(Instruction::Jump(maybe_true_label.clone()));
+                    } else {
+                        self.instruction(Instruction::Jump(exit_label.clone()));
+                    }
 
                     // false
                     self.instruction(Instruction::Label(false_label.clone()));
                     self.expect(Token::Colon)?;
                     let false_exp = self.do_expression(Self::precedence(&token))?;
                     let false_exp = self.make_rvalue(&false_exp)?;
-                    if Self::get_type(&false_exp) != Self::get_type(&true_exp) {
-                        let common_type = Self::get_common_type(
-                            &Self::get_type(&true_exp),
-                            &Self::get_type(&false_exp),
-                        )?;
-                        let false_converted = self.convert_to(&false_exp, &common_type, false)?;
-                        result = self.make_temporary(&common_type);
-                        self.instruction(Instruction::Copy(false_converted, result.clone()));
-                        self.instruction(Instruction::Jump(exit_label.clone()));
-                        self.instruction(Instruction::Label(maybe_true_label.clone()));
-                        let true_converted = self.convert_to(&true_exp, &common_type, false)?;
+                    match (false_exp.is_void(), true_exp.is_void()) {
+                        (true, true) => self.instruction(Instruction::Jump(exit_label.clone())),
 
-                        self.instruction(Instruction::Copy(true_converted, result.clone()));
-                    } else {
-                        self.instruction(Instruction::Copy(false_exp, result.clone()));
-                        self.instruction(Instruction::Label(maybe_true_label.clone()));
+                        (true, false) | (false, true) => {
+                            bail!("Cannot mix void and non-void in ternary operator")
+                        }
+                        _ => {
+                            if Self::get_type(&false_exp) != Self::get_type(&true_exp) {
+                                let common_type = if true_exp.is_pointer() || false_exp.is_pointer()
+                                {
+                                    Self::get_common_pointer_type(&true_exp, &false_exp)?
+                                } else {
+                                    Self::get_common_type(
+                                        &Self::get_type(&true_exp),
+                                        &Self::get_type(&false_exp),
+                                    )?
+                                };
+                                let false_converted =
+                                    self.convert_to(&false_exp, &common_type, false)?;
+                                result = self.make_temporary(&common_type);
+                                self.instruction(Instruction::Copy(
+                                    false_converted,
+                                    result.clone(),
+                                ));
+                                self.instruction(Instruction::Jump(exit_label.clone()));
+                                self.instruction(Instruction::Label(maybe_true_label.clone()));
+                                let true_converted =
+                                    self.convert_to(&true_exp, &common_type, true)?;
+
+                                self.instruction(Instruction::Copy(true_converted, result.clone()));
+                            } else {
+                                self.instruction(Instruction::Copy(false_exp, result.clone()));
+                                self.instruction(Instruction::Label(maybe_true_label.clone()));
+                            }
+                        }
                     }
                     self.instruction(Instruction::Label(exit_label.clone()));
                     result
@@ -245,16 +274,24 @@ impl Parser {
                         self.instruction(Instruction::Binary(op, promo, right, dest.clone()));
                         dest
                     } else {
-                        let common_type =
-                            if matches!(op, BinaryOperator::Equal | BinaryOperator::NotEqual)
-                                && (left_rv.is_pointer() || right.is_pointer())
-                            {
-                                Self::get_common_pointer_type(&left_rv, &right)
+                        let is_comp =
+                            matches!(op, BinaryOperator::Equal | BinaryOperator::NotEqual);
+                        let (left, right, common_type) =
+                            if is_comp && (left_rv.is_pointer() || right.is_pointer()) {
+                                let common_type = Self::get_common_pointer_type(&left_rv, &right)?;
+                                (
+                                    self.convert_to(&left_rv, &common_type, true)?,
+                                    self.convert_to(&right, &common_type, true)?,
+                                    common_type.clone(),
+                                )
                             } else {
-                                Self::get_common_type(&left_type, &right_type)
-                            }?;
-                        let left = self.convert_to(&left_rv, &common_type, false)?;
-                        let right = self.convert_to(&right, &common_type, false)?;
+                                let common_type = Self::get_common_type(&left_type, &right_type)?;
+                                (
+                                    self.convert_to(&left_rv, &common_type, false)?,
+                                    self.convert_to(&right, &common_type, false)?,
+                                    common_type.clone(),
+                                )
+                            };
                         let dest_type = if op == BinaryOperator::Equal
                             || op == BinaryOperator::NotEqual
                             || op == BinaryOperator::LessThan
@@ -391,16 +428,51 @@ impl Parser {
         if Self::is_arithmetic(&vtype) && Self::is_arithmetic(target_type) {
             return self.convert_to(value, target_type, false);
         }
-        if target_type.is_pointer()
-            && vtype.is_array()
-            && Self::get_inner_type(target_type)? == Self::get_inner_type(&vtype)?
-        {
-            // array to pointer decay
-            return self.array_to_pointer(value);
+
+        if target_type.is_pointer() {
+            if Self::is_null_pointer_constant(value) {
+                return Ok(Value::UInt64(0));
+            }
+            if vtype.is_array()
+                && ((Self::get_inner_type(target_type)? == Self::get_inner_type(&vtype)?)
+                    || target_type.is_void_pointer())
+            {
+                // array to pointer decay
+                return self.array_to_pointer(value);
+            }
+            if target_type.is_void_pointer() && vtype.is_pointer() {
+                // let ret = self.make_temporary(target_type);
+                // if vtype.is_array() {
+                //     // array to pointer decay
+                //     let ptr = self.array_to_pointer(value)?;
+                //     self.instruction(Instruction::Copy(ptr.clone(), ret.clone()));
+                // } else {
+                //     if !vtype.is_pointer() {
+                //         bail!("Expected pointer, got {:?}", vtype);
+                //     }
+                //     self.instruction(Instruction::Copy(value.clone(), ret.clone()));
+                // }
+                return self.convert_to(value, target_type, true);
+                //return Ok(ret);
+            }
+            if vtype.is_void_pointer() {
+                return self.convert_to(value, target_type, true);
+            }
         }
-        if target_type.is_pointer() && Self::is_null_pointer_constant(value) {
-            return Ok(Value::UInt64(0));
-        }
+
+        // if target_type.is_pointer()
+        //     && vtype.is_array()
+        //     && Self::get_inner_type(target_type)? == Self::get_inner_type(&vtype)?
+        // {
+        //     // array to pointer decay
+        //     return self.array_to_pointer(value);
+        // }
+        // //       if target_type.is_pointer() &&
+        // if target_type.is_pointer() && target_type.get_inner_type().unwrap().is_void() {
+        //     let ret = self.make_temporary(target_type);
+        //     self.instruction(Instruction::Copy(value.clone(), ret.clone()));
+        //     return Ok(ret);
+        // }
         bail!("Cannot convert {:?} to {:?}", value, target_type);
     }
 
@@ -415,7 +487,8 @@ impl Parser {
             Value::UChar(_) => SymbolType::UChar,
             Value::String(_) => SymbolType::Pointer(Box::new(SymbolType::Char)),
             Value::Variable(_, t) => t.clone(),
-            //   _ => todo!(),
+            Value::Void => SymbolType::Void,
+            //_ => unreachable!(),
         }
     }
     pub fn is_signed(symbol: &SymbolType) -> bool {
@@ -437,9 +510,10 @@ impl Parser {
             SymbolType::UChar => 1,
             SymbolType::SChar => 1,
             SymbolType::Array(t, _) => Self::get_total_object_size(t).unwrap(),
+            SymbolType::Void => unreachable!(),
         }
     }
-    fn get_common_pointer_type(a: &Value, b: &Value) -> Result<SymbolType> {
+    pub fn get_common_pointer_type(a: &Value, b: &Value) -> Result<SymbolType> {
         let atype = Self::get_type(a);
         let btype = Self::get_type(b);
         if atype == btype {
@@ -450,6 +524,9 @@ impl Parser {
         }
         if Self::is_null_pointer_constant(b) {
             return Ok(atype.clone());
+        }
+        if (a.is_void_pointer() && b.is_pointer()) || (a.is_pointer() && b.is_void_pointer()) {
+            return Ok(SymbolType::Pointer(Box::new(SymbolType::Void)));
         }
         bail!(
             "Cannot convert between different pointer types {:?} {:?}",
@@ -487,7 +564,27 @@ impl Parser {
         }
         Ok(if sizea > sizeb { a.clone() } else { b.clone() })
     }
+    fn check_cast(&mut self, target_type: &SymbolType, value: &Value) -> Result<()> {
+        let vtype = Self::get_type(value);
+        match (target_type, vtype.clone()) {
+            (SymbolType::Pointer(_), SymbolType::Double)
+            | (SymbolType::Double, SymbolType::Pointer(_)) => {
+                bail!("Cannot cast pointer to double or vice versa");
+            }
+            (SymbolType::Void, _) => Ok(()),
+            _ => {
+                if !Self::is_scalar(target_type) {
+                    bail!("Cannot cast {:?} to {:?}", value, target_type);
+                }
+                if !Self::is_scalar(&vtype) {
+                    bail!("Cannot cast {:?} to {:?}", value, target_type);
+                }
+                Ok(())
+            }
+        }
+    }
     // note that this converts immediates as well as variables
+    // explicit_cast means 'force it'
     pub fn convert_to(
         &mut self,
         value: &Value,
@@ -495,8 +592,13 @@ impl Parser {
         explicit_cast: bool,
     ) -> Result<Value> {
         println!("convert {:?} to {:?}", value, target_type);
+        if explicit_cast {
+            self.check_cast(target_type, value)?;
+        }
+        if target_type.is_void() {
+            return Ok(Value::Void);
+        }
         let vtype = Self::get_type(value);
-
         let return_value = if vtype == *target_type {
             // easy case
             value.clone()
@@ -555,10 +657,25 @@ impl Parser {
 
                 // variables
                 _ => {
+                    if value.is_constant() {
+                        bail!("Cannot convert constant to pointer type");
+                    }
                     let dest = self.make_temporary(target_type);
                     assert!(!value.is_string());
                     match (&vtype, target_type) {
                         (SymbolType::Pointer(_), SymbolType::Pointer(_)) => {
+                            //      if explicit_cast {
+                            if value.is_void_pointer() {
+                                let dest = self.make_temporary(target_type);
+                                self.instruction(Instruction::Copy(value.clone(), dest.clone()));
+                                return Ok(dest.clone());
+                            }
+                            if Self::get_inner_type(target_type)? == SymbolType::Void {
+                                let dest = self.make_temporary(target_type);
+                                self.instruction(Instruction::Copy(value.clone(), dest.clone()));
+                                return Ok(dest.clone());
+                            }
+                            // }
                             if !explicit_cast {
                                 if Self::decay_arg(&vtype) == Self::decay_arg(target_type) {
                                     return Ok(value.clone());
@@ -728,17 +845,22 @@ impl Parser {
         ));
         Ok(dest)
     }
-    fn make_rvalue(&mut self, value: &PendingResult) -> Result<Value> {
-        println!("make_rvalue {:?}", value);
+    // the core of make_rv, so that it can be called without the array to pointer conversion
+    fn inner_make_rv(&mut self, value: &PendingResult, sizeof: bool) -> Result<Value> {
+        println!("inner_make_rv {:?}", value);
         let ret = match &value {
             PendingResult::Dereference(var) => {
                 assert!(var.is_pointer(), "Expected pointer, got {:?}", var);
                 let ptype = Self::get_type(var);
                 let stype = Self::get_pointee_type(&ptype)?;
                 let deref_dest = match stype {
-                    SymbolType::Array(t, _) => {
+                    SymbolType::Array(ref t, _) => {
                         let name = var.as_variable().unwrap().0.clone();
-                        let dest = Value::Variable(name, SymbolType::Pointer(t));
+                        let dest = if !sizeof {
+                            Value::Variable(name, SymbolType::Pointer(t.clone()))
+                        } else {
+                            Value::Variable(name, stype.clone())
+                        };
                         dest.clone()
                     }
                     _ => {
@@ -752,6 +874,16 @@ impl Parser {
             }
             PendingResult::PlainValue(var) => var.clone(),
         };
+        Ok(ret)
+    }
+    fn make_rvalue(&mut self, value: &PendingResult) -> Result<Value> {
+        println!("make_rvalue {:?}", value);
+        let ret = self.inner_make_rv(value, false)?;
+
+        if ret.is_void() {
+            //  bail!("Cannot use void type in expression");
+            return Ok(ret);
+        }
         let ret = if !ret.is_string() || !self.static_init {
             self.array_to_pointer(&ret.clone())?
         } else {
@@ -811,11 +943,12 @@ impl Parser {
                 return Ok(PendingResult::PlainValue(update));
             }
             Token::Negate => {
+                // -x
                 self.next_token()?;
-                let source = self.do_unary()?;
+                let source = self.parse_cast()?;
                 let source = self.make_rvalue(&source)?;
-                if source.is_pointer() {
-                    bail!("Cannot use ! on pointer type");
+                if !source.is_arithmetic() {
+                    bail!("Cannot use - on non arithmetic type");
                 }
                 let source = if source.stype().is_character() {
                     self.convert_to(&source, &SymbolType::Int32, true)?
@@ -830,10 +963,11 @@ impl Parser {
             }
 
             Token::Complement => {
+                // ~x
                 self.next_token()?;
-                let source = self.do_unary()?;
+                let source = self.parse_cast()?;
                 let source = self.make_rvalue(&source)?;
-                if source.is_double() || source.is_pointer() {
+                if source.is_double() || !source.is_arithmetic() {
                     bail!("Cannot use ~ on double or pointer type");
                 }
                 let source = if source.stype().is_character() {
@@ -848,9 +982,13 @@ impl Parser {
                 PendingResult::PlainValue(ret_dest)
             }
             Token::Not => {
+                // !x
                 self.next_token()?;
-                let source = self.do_unary()?;
+                let source = self.parse_cast()?;
                 let source = self.make_rvalue(&source)?;
+                if !source.is_scalar() {
+                    bail!("Cannot use ! on non scalar type");
+                }
                 let ret_dest = self.make_temporary(&SymbolType::Int32);
                 let unop = Instruction::Unary(UnaryOperator::LogicalNot, source, ret_dest.clone());
                 self.instruction(unop);
@@ -859,7 +997,7 @@ impl Parser {
             // &  = address of
             Token::BitwiseAnd => {
                 self.next_token()?;
-                let source = self.do_unary()?;
+                let source = self.parse_cast()?;
                 println!("address of {:?}", source);
                 match &source {
                     PendingResult::Dereference(v) => PendingResult::PlainValue(v.clone()),
@@ -900,7 +1038,7 @@ impl Parser {
             // * = dereference
             Token::Multiply => {
                 self.next_token()?;
-                let source = self.do_unary()?;
+                let source = self.parse_cast()?;
                 let source = self.make_rvalue(&source)?;
                 if !source.is_pointer() {
                     bail!("Expected pointer, got {:?}", source);
@@ -918,37 +1056,128 @@ impl Parser {
                         | Token::Unsigned
                         | Token::Long
                         | Token::Char
+                        | Token::Void
                 ) =>
             {
+                self.parse_cast()?
+            }
+            Token::Sizeof => {
                 self.next_token()?;
-                let specifiers = self.parse_specifiers(false)?;
-
-                if specifiers.specified_type.is_none() {
-                    bail!("Expected type specifier after (");
-                }
                 let token = self.peek()?;
-                let base_type = specifiers.specified_type.unwrap();
-                let target_type = if token == Token::RightParen {
-                    base_type.clone()
+                if token == Token::LeftParen {
+                    //   self.next_token()?;
+
+                    let token2 = self.peek_n(1)?;
+                    if !matches!(
+                        token2,
+                        Token::Int
+                            | Token::Double
+                            | Token::Signed
+                            | Token::Unsigned
+                            | Token::Long
+                            | Token::Char
+                            | Token::Void
+                    ) {
+                        println!("sizeof expr");
+                        self.suppress_output = true;
+                        let exp = self.parse_cast()?;
+
+                        let exp_rv = self.inner_make_rv(&exp, true)?;
+                        self.suppress_output = false;
+                        //let stype = Self::get_type(&exp_rv);
+                        let size = if exp_rv.is_string() {
+                            exp_rv.as_string().unwrap().len() + 1
+                        } else {
+                            Self::get_total_object_size(&Self::get_type(&exp_rv))?
+                        };
+
+                        return Ok(PendingResult::PlainValue(Value::UInt64(size as u64)));
+                    } else {
+                        println!("sizeof cast");
+                        self.next_token()?;
+                        let target_type = self.parse_type_name()?;
+                        self.expect(Token::RightParen)?;
+                        let size = Self::get_total_object_size(&target_type)?;
+                        return Ok(PendingResult::PlainValue(Value::UInt64(size as u64)));
+                    }
                 } else {
-                    let decl = self.parse_abstract_declarator()?;
-                    let abs = Self::process_abstract_declarator(&decl, &base_type)?;
-                    println!("cast abstract decl {:?}", abs);
-
-                    abs
-                };
-                self.expect(Token::RightParen)?;
-                let source = self.do_unary()?;
-                let source = self.make_rvalue(&source)?;
-
-                let ret_dest = self.make_temporary(&target_type);
-                let converted = self.convert_to(&source, &target_type, true)?;
-                self.instruction(Instruction::Copy(converted, ret_dest.clone()));
-                PendingResult::PlainValue(ret_dest)
+                    println!("naked sizeof");
+                    self.suppress_output = true;
+                    let exp = self.do_unary()?;
+                    let exp_rv = self.inner_make_rv(&exp, true)?;
+                    self.suppress_output = false;
+                    let size = if exp_rv.is_string() {
+                        exp_rv.as_string().unwrap().len() + 1
+                    } else {
+                        Self::get_total_object_size(&Self::get_type(&exp_rv))?
+                    };
+                    return Ok(PendingResult::PlainValue(Value::UInt64(size as u64)));
+                }
             }
             _ => self.do_postfix()?,
         };
         Ok(ret_val)
+    }
+    fn parse_cast(&mut self) -> Result<PendingResult> {
+        // <cast-exp. := "(" <type-name> ")" <cast-exp>
+        //              | <unary_exp>
+        println!("parse_cast");
+        let token = self.peek()?;
+        // fast out - no "("
+        if token != Token::LeftParen {
+            return self.do_unary();
+        }
+        // cast or expr in ()?
+        let token2 = self.peek_n(1)?;
+        if matches!(
+            token2,
+            Token::Int
+                | Token::Double
+                | Token::Signed
+                | Token::Unsigned
+                | Token::Long
+                | Token::Char
+                | Token::Void
+        ) {
+            // cast
+            self.next_token()?;
+
+            let target_type = self.parse_type_name()?;
+            self.expect(Token::RightParen)?;
+            let source = self.parse_cast()?;
+            let source = self.make_rvalue(&source)?;
+            let ret_dest = self.make_temporary(&target_type);
+            let converted = self.convert_to(&source, &target_type, true)?;
+            if converted.is_void() {
+                return Ok(PendingResult::PlainValue(ret_dest));
+            }
+            self.instruction(Instruction::Copy(converted, ret_dest.clone()));
+            return Ok(PendingResult::PlainValue(ret_dest));
+        }
+        // expr in ()
+        self.do_unary()
+    }
+    fn parse_type_name(&mut self) -> Result<SymbolType> {
+        /*
+        <type-name> ::= {<type-specifier>}+ [<abstract-declarator>]
+        */
+        let specifiers = self.parse_specifiers(false)?;
+
+        if specifiers.specified_type.is_none() {
+            bail!("Expected type specifier after (");
+        }
+        let token = self.peek()?;
+        let base_type = specifiers.specified_type.unwrap();
+        let target_type = if token == Token::RightParen {
+            base_type.clone()
+        } else {
+            let decl = self.parse_abstract_declarator()?;
+            let abs = Self::process_abstract_declarator(&decl, &base_type)?;
+            println!("cast abstract decl {:?}", abs);
+
+            abs
+        };
+        Ok(target_type)
     }
     fn process_index(&mut self, primary: &PendingResult) -> Result<PendingResult> {
         let token = self.peek()?;
@@ -977,7 +1206,9 @@ impl Parser {
         if !ptr.is_pointer() {
             bail!("Expected pointer, got {:?}", ptr);
         }
-
+        if ptr.is_void_pointer() {
+            bail!("Cannot index void pointer");
+        }
         let index = self.convert_to(&index, &SymbolType::Int64, true)?;
         self.expect(Token::RightBracket)?;
 
@@ -1176,9 +1407,12 @@ impl Parser {
                             argidx
                         );
                     }
-
+                    if return_type.is_void() {
+                        self.instruction(Instruction::FunCall(name, args, None));
+                        return Ok(PendingResult::PlainValue(Value::Void));
+                    }
                     let ret_dest = self.make_temporary(&return_type.clone()); // TODO
-                    self.instruction(Instruction::FunCall(name, args, ret_dest.clone()));
+                    self.instruction(Instruction::FunCall(name, args, Some(ret_dest.clone())));
                     PendingResult::PlainValue(ret_dest)
                 } else if let Some((symbol, _)) = self.lookup_symbol(&name) {
                     if symbol.stype.is_function() {
@@ -1327,6 +1561,18 @@ impl Parser {
                 | SymbolType::UInt64,
             ) => {
                 bail!("Cannot compare pointer to number")
+            }
+            (
+                BinaryOperator::GreaterThan
+                | BinaryOperator::LessThan
+                | BinaryOperator::GreaterThanOrEqual
+                | BinaryOperator::LessThanOrEqual,
+                SymbolType::Pointer(t1),
+                SymbolType::Pointer(t2),
+            ) => {
+                if t1 != t2 {
+                    bail!("Cannot compare pointers of different types")
+                }
             }
             (
                 BinaryOperator::Add | BinaryOperator::Subtract,

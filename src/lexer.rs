@@ -93,6 +93,7 @@ pub enum Token {
     Unsigned,
     Double,
     Char,
+    Sizeof,
 
     // special
     Eof,
@@ -374,6 +375,7 @@ impl Lexer {
             "unsigned" => Token::Unsigned,
             "double" => Token::Double,
             "char" => Token::Char,
+            "sizeof" => Token::Sizeof,
 
             _ => Token::Identifier(s.to_string()),
         }

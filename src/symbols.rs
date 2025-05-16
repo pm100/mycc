@@ -26,6 +26,7 @@ pub enum SymbolType {
     Char,
     SChar,
     UChar,
+    Void,
     Function(Vec<SymbolType>, Box<SymbolType>),
     Pointer(Box<SymbolType>),
     Array(Box<SymbolType>, usize),
@@ -73,6 +74,9 @@ impl SymbolType {
     }
     pub fn get_inner_type(&self) -> Result<SymbolType> {
         Parser::get_inner_type(self)
+    }
+    pub fn is_void_pointer(&self) -> bool {
+        matches!(self, SymbolType::Pointer(t) if t.is_void())
     }
 }
 impl Parser {

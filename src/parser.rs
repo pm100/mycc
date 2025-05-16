@@ -45,6 +45,7 @@ pub struct Parser {
     in_function_body: bool,
     pub externs: HashMap<String, Extern>,
     pub static_init: bool,
+    pub suppress_output: bool,
 }
 #[derive(Debug, Clone, PartialEq, EnumAsInner)]
 enum Initializer {
@@ -73,6 +74,7 @@ impl Parser {
             in_function_body: false,
             externs: HashMap::new(),
             static_init: false,
+            suppress_output: false,
         }
     }
 
@@ -275,6 +277,9 @@ impl Parser {
                 SymbolType::Array(_, _) => {
                     bail!("Function {} already declared as array", name);
                 }
+                SymbolType::Void => {
+                    unreachable!()
+                }
             }
         } else {
             true
@@ -366,7 +371,7 @@ impl Parser {
         if self.labels.iter().any(|l| !l.1) {
             bail!("Undefined label");
         }
-        self.instruction(Instruction::Return(Value::Int32(0)));
+        self.instruction(Instruction::Return(Some(Value::Int32(0))));
         Ok(())
     }
     fn do_block(&mut self) -> Result<()> {
@@ -400,6 +405,12 @@ impl Parser {
         if specifiers.specified_type.is_none() {
             bail!("missing type");
         }
+        if symbol_type.is_void()
+            || (symbol_type.is_array() && Self::get_inner_type(symbol_type)? == SymbolType::Void)
+        {
+            bail!("Variable type cannot be 'void'");
+        }
+        //if specifiers.specified_type.is
         let symbol_type = symbol_type.clone(); //specifiers.specified_type.clone().unwrap().clone();
         let token = self.peek()?;
         let init = if token == Token::Assign {
@@ -1209,10 +1220,13 @@ impl Parser {
         let func_name = &self.current_function_name;
         let (func_sym, _) = self.lookup_global_symbol(func_name).unwrap();
         let ret_type = *func_sym.stype.as_function().unwrap().1.clone();
-
-        let val = self.do_rvalue_expression()?;
-        let converted_val = self.convert_by_assignment(&val, &ret_type)?;
-        self.instruction(Instruction::Return(converted_val));
+        if !ret_type.is_void() {
+            let val = self.do_rvalue_expression()?;
+            let converted_val = self.convert_by_assignment(&val, &ret_type)?;
+            self.instruction(Instruction::Return(Some(converted_val)));
+        } else {
+            self.instruction(Instruction::Return(None));
+        }
         self.expect(Token::SemiColon)?;
 
         Ok(())
@@ -1415,7 +1429,7 @@ impl Parser {
         } else {
             false
         };
-        if skip_before_case {
+        if skip_before_case || self.suppress_output {
             println!("skip_before_case {:?}", instruction);
             return;
         }
@@ -1431,7 +1445,7 @@ impl Parser {
         if token == Token::Eof {
             self.eof_hit = true;
         }
-        // println!("next_token {:?}", token);
+        //  println!("next_token {:?}", token);
         Ok(token)
     }
     fn dump_var_map(&self) {
@@ -1467,7 +1481,7 @@ impl Parser {
     }
     pub(crate) fn peek(&mut self) -> Result<Token> {
         let token = self.peek_n(0);
-        //  println!("peek {:?}", token);
+        // println!("peek {:?}", token);
         token
     }
 

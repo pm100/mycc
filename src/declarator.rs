@@ -62,6 +62,9 @@ impl Parser {
                 Self::process_declarator(pdecl, &stype)
             }
             Declarator::Array(pdecl, size) => {
+                if base_type.is_void() {
+                    bail!("Array type cannot be void");
+                }
                 let stype = SymbolType::Array(Box::new(base_type.clone()), *size);
                 Self::process_declarator(pdecl, &stype)
             }
@@ -269,7 +272,7 @@ impl Parser {
         }
 
         // special case -- int x(void)
-        if self.peek()? == Token::Void {
+        if self.peek()? == Token::Void && self.peek_n(1)? != Token::Multiply {
             self.next_token()?;
             self.expect(Token::RightParen)?;
             return Ok(parameters);
@@ -324,6 +327,7 @@ impl Parser {
         let mut unsigned = false;
         let mut double = false;
         let mut char = false;
+        let mut void = false;
 
         loop {
             let token = self.peek()?;
@@ -402,9 +406,13 @@ impl Parser {
                 }
                 Token::Void => {
                     self.next_token()?;
-                    if specifiers.specified_type.is_some() {
+                    if int || long || long_long || char || signed || unsigned || double {
+                        bail!("integer types and void cannot be used together");
+                    }
+                    if void {
                         bail!("Duplicate void specifier");
                     }
+                    void = true;
                 }
                 Token::Extern => {
                     self.next_token()?;
@@ -429,7 +437,13 @@ impl Parser {
                 _ => break,
             };
         }
-
+        if void {
+            if int || long || long_long || char || signed || unsigned || double {
+                bail!("integer types and void cannot be used together");
+            }
+            specifiers.specified_type = Some(SymbolType::Void);
+            return Ok(specifiers);
+        }
         if char {
             if signed {
                 specifiers.specified_type = Some(SymbolType::SChar);
@@ -472,6 +486,7 @@ impl Parser {
         if unsigned {
             specifiers.specified_type = Some(SymbolType::UInt32);
         }
+        println!("specifiers {:?}", specifiers);
         Ok(specifiers)
     }
 }

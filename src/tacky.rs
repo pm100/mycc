@@ -12,7 +12,7 @@ pub struct TackyProgram {
 }
 #[derive(Debug)]
 pub enum Instruction {
-    Return(Value),
+    Return(Option<Value>),
     Unary(UnaryOperator, Value, Value),
     Binary(BinaryOperator, Value, Value, Value),
     Copy(Value, Value),
@@ -20,7 +20,7 @@ pub enum Instruction {
     JumpIfZero(Value, String),
     JumpIfNotZero(Value, String),
     Label(String),
-    FunCall(String, Vec<Value>, Value),
+    FunCall(String, Vec<Value>, Option<Value>),
     SignExtend(Value, Value),
     ZeroExtend(Value, Value),
     Truncate(Value, Value),
@@ -74,6 +74,7 @@ pub enum Value {
     UChar(u8),
     String(String),
     Variable(String, SymbolType),
+    Void,
 }
 #[derive(Debug, Clone, PartialEq)]
 pub enum PendingResult {
@@ -107,11 +108,27 @@ impl Value {
     pub fn is_array(&self) -> bool {
         matches!(self, Value::Variable(_, SymbolType::Array(_, _)))
     }
+    pub fn is_arithmetic(&self) -> bool {
+        Parser::is_arithmetic(&self.stype())
+    }
     pub fn stype(&self) -> SymbolType {
         Parser::get_type(self)
     }
     pub fn is_constant(&self) -> bool {
         !matches!(self, Value::Variable(_, _))
+    }
+    pub fn is_void_pointer(&self) -> bool {
+        if self.is_pointer() {
+            if let Value::Variable(_, stype) = self {
+                if let SymbolType::Pointer(inner) = stype {
+                    return matches!(**inner, SymbolType::Void);
+                }
+            }
+        }
+        false
+    }
+    pub fn is_scalar(&self) -> bool {
+        Parser::is_scalar(&self.stype())
     }
 }
 #[derive(Debug)]
@@ -243,7 +260,10 @@ impl TackyProgram {
                 SymbolType::Function(_, _) => AssemblyType::QuadWord, // TODO
                 SymbolType::Pointer(_) => AssemblyType::QuadWord,
                 SymbolType::Array(_, _) => todo!(), // TODO
+                SymbolType::Void => unreachable!("Void type should not be used in assembly"),
             },
+            Value::Void => unreachable!("Void type should not be used in assembly"),
+            //   SymbolType::Void => unreachable!("Void type should not be used in assembly"),
         }
     }
     pub(crate) fn add_instruction(&mut self, instruction: Instruction) {

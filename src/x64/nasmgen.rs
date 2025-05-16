@@ -163,25 +163,27 @@ impl X64CodeGenerator {
                         writeln!(writer, " dq {}", 0)?
                     }
                     SymbolType::Array(_, _) => {
-                        let (size, etype) = Parser::get_array_count_and_type(&var.stype)?;
-                        for _i in 0..size {
-                            match etype {
-                                SymbolType::Int32 | SymbolType::UInt32 => {
-                                    writeln!(writer, " dd {}", 0)?
-                                }
-                                SymbolType::Int64 | SymbolType::UInt64 | SymbolType::Pointer(_) => {
-                                    writeln!(writer, " dq {}", 0)?
-                                }
-                                SymbolType::Double => {
-                                    writeln!(writer, " dq {}", 0)?;
-                                    writeln!(writer, " dq {}", 0)?
-                                }
-                                SymbolType::Char | SymbolType::UChar | SymbolType::SChar => {
-                                    writeln!(writer, " db {}", 0)?
-                                }
-                                _ => unreachable!(),
-                            }
-                        }
+                        let size = Parser::get_total_object_size(&var.stype)?;
+                        //let (size, etype) = Parser::get_array_count_and_type(&var.stype)?;
+                        // for _i in 0..size {
+                        //     match etype {
+                        //         SymbolType::Int32 | SymbolType::UInt32 => {
+                        //             writeln!(writer, " dd {}", 0)?
+                        //         }
+                        //         SymbolType::Int64 | SymbolType::UInt64 | SymbolType::Pointer(_) => {
+                        //             writeln!(writer, " dq {}", 0)?
+                        //         }
+                        //         SymbolType::Double => {
+                        //             writeln!(writer, " dq {}", 0)?;
+                        //             writeln!(writer, " dq {}", 0)?
+                        //         }
+                        //         SymbolType::Char | SymbolType::UChar | SymbolType::SChar => {
+                        //             writeln!(writer, " db {}", 0)?
+                        //         }
+                        //         _ => unreachable!(),
+                        //     }
+                        // }
+                        writeln!(writer, " resb {}", size)?;
                     }
                     _ => unreachable!(),
                 }

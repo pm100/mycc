@@ -157,6 +157,7 @@ impl Compiler {
             "/entry:main",
             "/defaultlib:ucrt.lib",
             "/defaultlib:msvcrt.lib",
+            "/defaultlib:libvcruntime.lib",
             "/defaultlib:legacy_stdio_definitions.lib",
             "/defaultlib:Kernel32.lib",
             "/defaultlib:Shell32.lib",

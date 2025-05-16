@@ -18,7 +18,12 @@ impl Parser {
                 | SymbolType::SChar
         )
     }
-
+    pub fn is_scalar(stype: &SymbolType) -> bool {
+        !matches!(
+            stype,
+            SymbolType::Array(_, _) | SymbolType::Void | SymbolType::Function(_, _)
+        )
+    }
     pub fn is_integer(stype: &SymbolType) -> bool {
         matches!(
             stype,

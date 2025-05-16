@@ -75,6 +75,7 @@ impl X64BackEnd {
                 let align = X64CodeGenerator::calculate_alignment(stype);
                 AssemblyType::ByteArray(esize * size, align)
             }
+            SymbolType::Void => unreachable!(),
         }
     }
 
@@ -149,14 +150,15 @@ impl X64BackEnd {
         println!("Tacky: {:?}", instruction);
         match instruction {
             tacky::Instruction::Return(value) => {
-                let (value, _stype, assembly_type) = self.get_value(value);
-                let ret_reg = if assembly_type == AssemblyType::Double {
-                    Operand::Register(Register::XMM0)
-                } else {
-                    Operand::Register(Register::RAX)
-                };
-                self.moira(Instruction::Mov(assembly_type, value, ret_reg));
-
+                if let Some(value) = value {
+                    let (value, _stype, assembly_type) = self.get_value(value);
+                    let ret_reg = if assembly_type == AssemblyType::Double {
+                        Operand::Register(Register::XMM0)
+                    } else {
+                        Operand::Register(Register::RAX)
+                    };
+                    self.moira(Instruction::Mov(assembly_type, value, ret_reg));
+                }
                 let instruction = Instruction::Ret;
                 self.moira(instruction);
             }
@@ -294,7 +296,6 @@ impl X64BackEnd {
                 self.moira(Instruction::Label(label.clone()));
             }
             tacky::Instruction::FunCall(name, args, dest) => {
-                let (dest, _stype, ret_assembly_type) = self.get_value(dest);
                 let int_reglist: [Register; 4] =
                     [Register::RCX, Register::RDX, Register::R8, Register::R9];
                 let float_reglist: [Register; 4] = [
@@ -347,13 +348,15 @@ impl X64BackEnd {
                 self.moira(Instruction::AllocateStack(32));
                 self.moira(Instruction::Call(name.clone()));
                 self.moira(Instruction::DeallocateStack(stack_delta));
-
-                let ret_reg = if ret_assembly_type == AssemblyType::Double {
-                    Operand::Register(Register::XMM0)
-                } else {
-                    Operand::Register(Register::RAX)
-                };
-                self.moira(Instruction::Mov(ret_assembly_type, ret_reg, dest));
+                if let Some(dest) = dest {
+                    let (dest, _stype, ret_assembly_type) = self.get_value(dest);
+                    let ret_reg = if ret_assembly_type == AssemblyType::Double {
+                        Operand::Register(Register::XMM0)
+                    } else {
+                        Operand::Register(Register::RAX)
+                    };
+                    self.moira(Instruction::Mov(ret_assembly_type, ret_reg, dest));
+                }
             }
 
             tacky::Instruction::SignExtend(src, dest) => {
@@ -916,7 +919,7 @@ impl X64BackEnd {
 
                 (dest, SymbolType::Double, AssemblyType::Double)
             }
-
+            tacky::Value::Void => unreachable!(),
             tacky::Value::Variable(register, symbol_type) => {
                 let assembly_type = Self::get_assembly_type(symbol_type);
                 if self.moira.top_vars.iter().any(|v| v.name == *register)
