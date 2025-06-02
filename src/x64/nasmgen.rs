@@ -93,7 +93,23 @@ impl X64CodeGenerator {
         let hex = value.to_bits();
         format!("{:x}", hex)
     }
+    fn calculate_static_alignment(init: &StaticInit) -> usize {
+        match init {
+            StaticInit::InitChar(_) => 1,
+            StaticInit::InitUChar(_) => 1,
+            StaticInit::InitI32(_) => 4,
+            StaticInit::InitU32(_) => 4,
+            StaticInit::InitI64(_) => 8,
+            StaticInit::InitU64(_) => 8,
+            StaticInit::InitDouble(_) => 8,
+            StaticInit::PointerInit(_) => 8,
+            StaticInit::InitNone(count) => 1,
+            StaticInit::InitString(_, _) => 1,
+            _ => unreachable!(),
+        }
+    }
     pub fn calculate_alignment(stype: &SymbolType) -> usize {
+        println!("Calculating alignment for {:?}", stype);
         match stype {
             SymbolType::Int32 | SymbolType::UInt32 => 4,
             SymbolType::Int64 | SymbolType::UInt64 | SymbolType::Pointer(_) => 8,
@@ -111,6 +127,11 @@ impl X64CodeGenerator {
                     SymbolType::Char | SymbolType::UChar | SymbolType::SChar => 1, // is it tho?
                     _ => unreachable!(),
                 }
+            }
+            SymbolType::Struct(sdef) => {
+                //    let sdef = self.moira.structure_defs.get(sname).unwrap();
+                return sdef.borrow().alignment;
+                //return 16;
             }
             _ => unreachable!(),
         }
@@ -134,6 +155,7 @@ impl X64CodeGenerator {
                 StaticInit::InitChar(0) => true,
                 StaticInit::InitUChar(0) => true,
                 StaticInit::InitString(s, _) => s.is_empty(),
+                StaticInit::InitNone(_) => true,
                 _ => false,
             });
             if empty {
@@ -148,48 +170,71 @@ impl X64CodeGenerator {
             let align = Self::calculate_alignment(&var.stype);
             writeln!(writer, "align {}", align)?;
 
-            writeln!(writer, "{}: ", var.name)?;
+            writeln!(writer, "${}: ", var.name)?;
             if empty {
-                match var.stype {
-                    SymbolType::Int32 | SymbolType::UInt32 => writeln!(writer, " dd {}", 0)?,
-                    SymbolType::Int64 | SymbolType::UInt64 | SymbolType::Pointer(_) => {
-                        writeln!(writer, " dq {}", 0)?
-                    }
-                    SymbolType::Char | SymbolType::UChar | SymbolType::SChar => {
-                        writeln!(writer, " db {}", 0)?
-                    }
-                    SymbolType::Double => {
-                        writeln!(writer, " dq {}", 0)?;
-                        writeln!(writer, " dq {}", 0)?
-                    }
-                    SymbolType::Array(_, _) => {
-                        let size = Parser::get_total_object_size(&var.stype)?;
-                        //let (size, etype) = Parser::get_array_count_and_type(&var.stype)?;
-                        // for _i in 0..size {
-                        //     match etype {
-                        //         SymbolType::Int32 | SymbolType::UInt32 => {
-                        //             writeln!(writer, " dd {}", 0)?
-                        //         }
-                        //         SymbolType::Int64 | SymbolType::UInt64 | SymbolType::Pointer(_) => {
-                        //             writeln!(writer, " dq {}", 0)?
-                        //         }
-                        //         SymbolType::Double => {
-                        //             writeln!(writer, " dq {}", 0)?;
-                        //             writeln!(writer, " dq {}", 0)?
-                        //         }
-                        //         SymbolType::Char | SymbolType::UChar | SymbolType::SChar => {
-                        //             writeln!(writer, " db {}", 0)?
-                        //         }
-                        //         _ => unreachable!(),
-                        //     }
-                        // }
-                        writeln!(writer, " resb {}", size)?;
-                    }
-                    _ => unreachable!(),
-                }
+                // match var.stype {
+                //     SymbolType::Int32 | SymbolType::UInt32 => writeln!(writer, " dd {}", 0)?,
+                //     SymbolType::Int64 | SymbolType::UInt64 | SymbolType::Pointer(_) => {
+                //         writeln!(writer, " dq {}", 0)?
+                //     }
+                //     SymbolType::Char | SymbolType::UChar | SymbolType::SChar => {
+                //         writeln!(writer, " db {}", 0)?
+                //     }
+                //     SymbolType::Double => {
+                //         writeln!(writer, " dq {}", 0)?;
+                //         writeln!(writer, " dq {}", 0)?
+                //     }
+                //     SymbolType::Array(_, _) => {
+                let size = Parser::get_total_object_size(&var.stype)?;
+                //let (size, etype) = Parser::get_array_count_and_type(&var.stype)?;
+                // for _i in 0..size {
+                //     match etype {
+                //         SymbolType::Int32 | SymbolType::UInt32 => {
+                //             writeln!(writer, " dd {}", 0)?
+                //         }
+                //         SymbolType::Int64 | SymbolType::UInt64 | SymbolType::Pointer(_) => {
+                //             writeln!(writer, " dq {}", 0)?
+                //         }
+                //         SymbolType::Double => {
+                //             writeln!(writer, " dq {}", 0)?;
+                //             writeln!(writer, " dq {}", 0)?
+                //         }
+                //         SymbolType::Char | SymbolType::UChar | SymbolType::SChar => {
+                //             writeln!(writer, " db {}", 0)?
+                //         }
+                //         _ => unreachable!(),
+                //     }
+                // }
+                writeln!(writer, " resb {}", size)?;
+                //   }
+                //     _ => unreachable!(),
+                // }
             } else {
+                // let mut offsets = match &var.stype {
+                //     SymbolType::Array(atype, size) => {
+                //         let mut res = Vec::new();
+                //         let sz = Parser::get_total_object_size(&atype).unwrap();
+
+                //         for _ in 0..*size {
+                //             res.push(sz);
+                //         }
+                //         res
+                //     }
+                //     SymbolType::Struct(sdef) => sdef
+                //         .borrow()
+                //         .members
+                //         .iter()
+                //         .map(|m| m.offset)
+                //         .collect::<Vec<usize>>(),
+                //     _ => unreachable!(),
+                // };
+                //                let mut offset = 0;
                 for init in var.init.iter() {
+                    //                  let next_offset = offsets.pop().unwrap();
                     match init {
+                        StaticInit::InitNone(count) => {
+                            writeln!(writer, " resb {}", count)?;
+                        }
                         StaticInit::InitI32(value) => writeln!(writer, " dd {}", value)?,
                         StaticInit::InitI64(value) => writeln!(writer, " dq {}", value)?,
                         StaticInit::InitU32(value) => writeln!(writer, " dd {}", value)?,
@@ -291,7 +336,7 @@ impl X64CodeGenerator {
         instruction: &Instruction,
         writer: &mut BufWriter<std::fs::File>,
     ) -> Result<()> {
-        // println!("Generating instruction: {:?}", instruction);
+        println!("Generating instruction: {:?}", instruction);
         match instruction {
             Instruction::Ret => {
                 writeln!(writer, "        mov rsp, rbp")?;
@@ -442,6 +487,17 @@ impl X64CodeGenerator {
                 let dest_str = self.get_operand(dest, &AssemblyType::QuadWord)?;
                 writeln!(writer, "        lea {}, {}", dest_str, src_str)?;
             }
+            Instruction::CopyBlock(src, dest, size) => {
+                let src_str = self.get_operand(src, &AssemblyType::ByteArray(0, 0))?;
+                let dest_str = self.get_operand(dest, &AssemblyType::ByteArray(0, 0))?;
+                writeln!(writer, "	lea	rcx, {}", src_str)?;
+                writeln!(writer, "	lea	rax, {}", dest_str)?;
+                writeln!(writer, "	mov rdi,rax")?;
+                writeln!(writer, "	mov rsi,rcx ")?;
+                writeln!(writer, "	mov rdi,rax ")?;
+                writeln!(writer, "	mov  ecx, {}", size)?;
+                writeln!(writer, "        rep movsb")?;
+            }
         }
         Ok(())
     }
@@ -522,16 +578,17 @@ impl X64CodeGenerator {
                     offset
                 )
             }
-            Operand::Data(data) => {
+            Operand::Data(data, offset) => {
                 let qual = match assembly_type {
                     AssemblyType::LongWord => "DWORD",
                     AssemblyType::QuadWord => "QWORD",
                     AssemblyType::Byte => "BYTE",
                     AssemblyType::Word => "WORD",
                     AssemblyType::Double => "",
+                    AssemblyType::ByteArray(_, _) => "",
                     _ => todo!(),
                 };
-                format!("{} [{}]", qual, data)
+                format!("{} [{}+{}]", qual, data, offset)
             }
             Operand::PseudoMem(data, _size, _offset, _align) => {
                 let qual = match assembly_type {
@@ -540,6 +597,7 @@ impl X64CodeGenerator {
                     AssemblyType::Byte => "BYTE",
                     AssemblyType::Word => "WORD",
                     AssemblyType::Double => "",
+                    AssemblyType::ByteArray(_, __) => "",
                     _ => todo!(),
                 };
                 format!("{} [{}]", qual, data)
@@ -623,7 +681,7 @@ impl X64CodeGenerator {
             Operand::ImmediateI8(_) => AssemblyType::Byte,
             Operand::ImmediateU8(_) => AssemblyType::Byte,
             Operand::Memory(_, _) => AssemblyType::QuadWord,
-            Operand::Data(_) => AssemblyType::QuadWord,
+            Operand::Data(_, _) => AssemblyType::QuadWord,
             Operand::PseudoMem(_, size, _, align) => AssemblyType::ByteArray(*size, *align),
             Operand::Indexed(_, _, _) => AssemblyType::QuadWord,
             Operand::Pseudo(_) => AssemblyType::QuadWord,
@@ -1138,6 +1196,11 @@ impl X64CodeGenerator {
                         new_instructions.push(Instruction::Lea(new_src, new_dest));
                     }
                 }
+                Instruction::CopyBlock(src, dest, size) => {
+                    let new_src = self.fix_pseudo(src, &AssemblyType::QuadWord)?;
+                    let new_dest = self.fix_pseudo(dest, &AssemblyType::QuadWord)?;
+                    new_instructions.push(Instruction::CopyBlock(new_src, new_dest, *size));
+                }
                 _ => {
                     new_instructions.push(instruction.clone());
                 }
@@ -1149,7 +1212,7 @@ impl X64CodeGenerator {
         Ok(new_instructions)
     }
     fn is_memory(operand: &Operand) -> bool {
-        matches!(operand, Operand::Memory(_, _)) || matches!(operand, Operand::Data(_))
+        matches!(operand, Operand::Memory(_, _)) || matches!(operand, Operand::Data(_, _))
     }
     fn is_constant(operand: &Operand) -> bool {
         matches!(
@@ -1232,9 +1295,13 @@ impl X64CodeGenerator {
                     "Fixing pseudo operand: {:?} assembly_type: {:?} align: {}",
                     operand, assembly_type, align
                 );
-                assert!(pseudo_name.contains('$'));
-                let stack_offset = self.lookup_pseudo(pseudo_name, *total_size as i32, *align);
-                Operand::Memory(Register::RBP, -stack_offset + *offset as i32)
+                // assert!(pseudo_name.contains('$'));
+                if pseudo_name.contains('$') {
+                    let stack_offset = self.lookup_pseudo(pseudo_name, *total_size as i32, *align);
+                    Operand::Memory(Register::RBP, -stack_offset + *offset as i32)
+                } else {
+                    Operand::Data(pseudo_name.clone(), *offset as usize)
+                }
             }
             _ => operand.clone(),
         })

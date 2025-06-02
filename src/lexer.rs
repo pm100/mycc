@@ -1,4 +1,5 @@
 use anyhow::{bail, Result};
+use enum_as_inner::EnumAsInner;
 
 pub struct Lexer {
     reader: LineReader,
@@ -8,7 +9,7 @@ pub struct Lexer {
     pub current_line_number: usize,
     chars: Vec<char>,
 }
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, EnumAsInner)]
 pub enum Token {
     // punctuation
     LeftParen,
@@ -22,6 +23,8 @@ pub enum Token {
     Comma,
     LeftBracket,
     RightBracket,
+    Dot,
+    Arrow,
 
     // basics
     Identifier(String),
@@ -94,10 +97,12 @@ pub enum Token {
     Double,
     Char,
     Sizeof,
+    Struct,
 
     // special
     Eof,
 }
+#[derive(Debug, Clone, PartialEq)]
 enum MaybeNumber {
     Number(i128),
     Float(f64),
@@ -244,6 +249,8 @@ impl Lexer {
                         Token::MinusEquals
                     } else if self.match_next('-') {
                         Token::MinusMinus
+                    } else if self.match_next('>') {
+                        Token::Arrow
                     } else {
                         Token::Negate
                     }
@@ -256,6 +263,12 @@ impl Lexer {
                     } else {
                         Token::Add
                     }
+                }
+                '.' if !self.peek().is_ascii_digit() => {
+                    if self.peek().is_ascii_digit() {
+                        bail!("invalid character");
+                    }
+                    Token::Dot
                 }
                 '*' => {
                     if self.match_next('=') {
@@ -376,6 +389,7 @@ impl Lexer {
             "double" => Token::Double,
             "char" => Token::Char,
             "sizeof" => Token::Sizeof,
+            "struct" => Token::Struct,
 
             _ => Token::Identifier(s.to_string()),
         }
@@ -407,12 +421,6 @@ impl Lexer {
             MaybeNumber::None => bail!("Error: invalid number"),
             MaybeNumber::Float(f) => Ok(Token::F64Constant(f)),
             MaybeNumber::Number(mut val) => {
-                // let start = self.current_pos - 1;
-                // while self.peek().is_ascii_digit() {
-                //     self.advance();
-                // }
-                //   let mut val: i128 = self.current_line[start..self.current_pos].parse().unwrap();
-
                 let mut unsigned = false;
                 let mut long = false;
                 loop {

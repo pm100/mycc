@@ -1,8 +1,13 @@
+use std::future::Pending;
+
 use crate::{
+    expect,
     lexer::Token,
     parser::Parser,
     symbols::SymbolType,
-    tacky::{BinaryOperator, Instruction, PendingResult, StaticInit, UnaryOperator, Value},
+    tacky::{
+        BinaryOperator, Instruction, PendingResult, StaticInit, StructMember, UnaryOperator, Value,
+    },
 };
 use anyhow::{bail, Result};
 //use backtrace::Symbol;
@@ -49,6 +54,11 @@ impl Parser {
                 deref_dest
             }
             PendingResult::PlainValue(var) => var.clone(),
+            PendingResult::SubObject(v, stype, offset) => {
+                let ret = self.make_temporary(stype);
+                self.instruction(Instruction::CopyFromOffset(v.clone(), *offset, ret.clone()));
+                ret
+            }
         };
 
         if ret.is_string() {
@@ -93,15 +103,25 @@ impl Parser {
                     match token {
                         // simple assignment
                         Token::Assign => {
+                            // let right_type = right.get_type();
+                            // if right_type.is_pointer()
+                            //     && right_type.get_inner_type()?.is_struct()
+                            //     && right_type == left.get_type()
+                            // {
+
+                            // }
                             let result = self.store_into_lvalue(&right_rv, &left)?;
 
                             // ensure we do not return an lvalue
+                            if !result.is_constant() {
+                                let result_type = result.stype();
+                                let not_lvalue = self.make_temporary(&result_type);
+                                self.instruction(Instruction::Copy(result, not_lvalue.clone()));
 
-                            let result_type = result.stype();
-                            let not_lvalue = self.make_temporary(&result_type);
-                            self.instruction(Instruction::Copy(result, not_lvalue.clone()));
-
-                            not_lvalue
+                                not_lvalue
+                            } else {
+                                result
+                            }
                         }
 
                         _ => {
@@ -312,6 +332,19 @@ impl Parser {
             };
             left = PendingResult::PlainValue(dest);
         }
+        if let PendingResult::PlainValue(ref left) = left {
+            if left.is_struct()
+                && left
+                    .stype()
+                    .as_struct()
+                    .unwrap()
+                    .borrow()
+                    .members
+                    .is_empty()
+            {
+                bail!("Cannot return empty struct from expression");
+            }
+        }
         Ok(left)
     }
     fn do_pointer_arithmetic(
@@ -509,8 +542,9 @@ impl Parser {
             SymbolType::Char => 1,
             SymbolType::UChar => 1,
             SymbolType::SChar => 1,
-            SymbolType::Array(t, _) => Self::get_total_object_size(t).unwrap(),
+            SymbolType::Array(t, _) => todo!(), //Self::get_total_object_size(t).unwrap(),
             SymbolType::Void => unreachable!(),
+            SymbolType::Struct(_) => unreachable!(),
         }
     }
     pub fn get_common_pointer_type(a: &Value, b: &Value) -> Result<SymbolType> {
@@ -813,6 +847,20 @@ impl Parser {
                     bail!("Cannot store into non-variable {:?}", dest);
                 }
             }
+            PendingResult::SubObject(var, stype, offset) => {
+                //let stype = var.stype();
+                if !self.is_lvalue(var) {
+                    bail!("Not lvalue {:?}", dest);
+                }
+                let converted = self.convert_by_assignment(value, &stype)?;
+
+                self.instruction(Instruction::CopyToOffset(
+                    converted.clone(),
+                    var.clone(),
+                    *offset,
+                ));
+                Ok(converted)
+            }
         }
     }
     fn array_to_pointer(&mut self, value: &Value) -> Result<Value> {
@@ -873,6 +921,16 @@ impl Parser {
                 deref_dest
             }
             PendingResult::PlainValue(var) => var.clone(),
+            //  _ => todo!(),
+            PendingResult::SubObject(var, stype, offset) => {
+                let dest = self.make_temporary(&stype);
+                self.instruction(Instruction::CopyFromOffset(
+                    var.clone(),
+                    *offset,
+                    dest.clone(),
+                ));
+                dest
+            }
         };
         Ok(ret)
     }
@@ -1033,6 +1091,19 @@ impl Parser {
                             PendingResult::PlainValue(ret_dest)
                         }
                     }
+                    PendingResult::SubObject(v, stype, offset) => {
+                        let dest =
+                            self.make_temporary(&SymbolType::Pointer(Box::new(stype.clone())));
+                        self.instruction(Instruction::GetAddress(v.clone(), dest.clone()));
+                        self.instruction(Instruction::AddPtr(
+                            dest.clone(),
+                            Value::Int64(*offset as i64),
+                            1,
+                            dest.clone(),
+                        ));
+
+                        PendingResult::PlainValue(dest)
+                    }
                 }
             }
             // * = dereference
@@ -1077,6 +1148,7 @@ impl Parser {
                             | Token::Long
                             | Token::Char
                             | Token::Void
+                            | Token::Struct
                     ) {
                         println!("sizeof expr");
                         self.suppress_output = true;
@@ -1138,6 +1210,7 @@ impl Parser {
                 | Token::Long
                 | Token::Char
                 | Token::Void
+                | Token::Struct
         ) {
             // cast
             self.next_token()?;
@@ -1145,7 +1218,19 @@ impl Parser {
             let target_type = self.parse_type_name()?;
             self.expect(Token::RightParen)?;
             let source = self.parse_cast()?;
+
             let source = self.make_rvalue(&source)?;
+            if source.is_struct()
+                && source
+                    .stype()
+                    .as_struct()
+                    .unwrap()
+                    .borrow()
+                    .members
+                    .is_empty()
+            {
+                bail!("Cannot cast incomplete struct");
+            }
             let ret_dest = self.make_temporary(&target_type);
             let converted = self.convert_to(&source, &target_type, true)?;
             if converted.is_void() {
@@ -1189,7 +1274,6 @@ impl Parser {
         // read the index value
         let index = self.do_expression(0)?;
         let index_rv = self.make_rvalue(&index)?;
-
         let ptr_rv = self.make_rvalue(primary)?;
 
         // we have a pointer and an index, lets get them the right way round
@@ -1227,20 +1311,245 @@ impl Parser {
         let next_idx = self.process_index(&idx_res)?;
         Ok(next_idx)
     }
+    fn get_struct_member(val: PendingResult, field_name: &str) -> Result<StructMember> {
+        match val {
+            PendingResult::PlainValue(v) => {
+                if let Value::Variable(_name, stype) = v {
+                    if let SymbolType::Struct(sdef) = stype {
+                        if let Some(fdef) =
+                            sdef.borrow().members.iter().find(|m| m.name == field_name)
+                        {
+                            return Ok(fdef.clone());
+                        }
+                        bail!(
+                            "Field {} not found in struct {}",
+                            field_name,
+                            sdef.borrow().name
+                        );
+                    }
+                }
+            }
+            PendingResult::Dereference(v) => {
+                if let Value::Variable(_name, stype) = v {
+                    if let SymbolType::Pointer(sym) = stype {
+                        //let p = v.get_inner_type()?;
+                        if !sym.is_struct() {
+                            bail!("Expected struct, got {:?}", sym);
+                        }
+                        let sdef = sym.as_struct().unwrap();
+                        if let Some(fdef) =
+                            sdef.borrow().members.iter().find(|m| m.name == field_name)
+                        {
+                            return Ok(fdef.clone());
+                        }
+                        bail!(
+                            "Field {} not found in struct {}",
+                            field_name,
+                            sdef.borrow().name
+                        );
+                    }
+                }
+            }
+            PendingResult::SubObject(v, stype, offset) => {
+                if let SymbolType::Struct(sdef) = stype {
+                    if let Some(fdef) = sdef.borrow().members.iter().find(|m| m.name == field_name)
+                    {
+                        return Ok(fdef.clone());
+                    }
+                    bail!(
+                        "Field {} not found in struct {}",
+                        field_name,
+                        sdef.borrow().name
+                    );
+                }
+            }
+        };
+        bail!("xx");
+    }
 
+    fn handle_dot(&mut self, primary: &PendingResult) -> Result<PendingResult> {
+        //let stype = primary.get_type();
+        let field = expect!(self, Token::Identifier);
+        let fdef = Self::get_struct_member(primary.clone(), &field)?;
+        println!("fdef xx{:?}", fdef);
+        // if let SymbolType::Struct(sdef) = stype.clone() {
+        //     if let Some(fdef) = sdef.borrow().members.get(&field) {
+        let ret = match primary {
+            PendingResult::PlainValue(v) => {
+                // let ftype = if fdef.stype.is_array() {
+                //     SymbolType::Pointer(Box::new(fdef.stype.get_inner_type()?))
+                // } else {
+                //     fdef.stype.clone()
+                // };
+                if fdef.stype.is_array() {
+                    let dest = self.make_temporary(&SymbolType::Pointer(Box::new(
+                        fdef.stype.get_inner_type()?,
+                    )));
+                    self.instruction(Instruction::GetAddress(v.clone(), dest.clone()));
+                    let fin = self.make_temporary(&dest.stype());
+                    self.instruction(Instruction::AddPtr(
+                        dest,
+                        Value::Int64(fdef.offset as i64),
+                        1,
+                        fin.clone(),
+                    ));
+                    PendingResult::PlainValue(fin)
+                } else {
+                    PendingResult::SubObject(v.clone(), fdef.stype, fdef.offset)
+                }
+            }
+
+            PendingResult::Dereference(v) => {
+                let dest = self.make_temporary(&SymbolType::Pointer(Box::new(fdef.stype.clone())));
+                self.instruction(Instruction::AddPtr(
+                    v.clone(),
+                    Value::Int64(fdef.offset as i64),
+                    1,
+                    dest.clone(),
+                ));
+                PendingResult::Dereference(dest)
+            }
+            PendingResult::SubObject(v, stype, offset) => {
+                if fdef.stype.is_array() {
+                    let dest = self.make_temporary(&SymbolType::Pointer(Box::new(
+                        fdef.stype.get_inner_type()?,
+                    )));
+                    self.instruction(Instruction::GetAddress(v.clone(), dest.clone()));
+                    let fin = self.make_temporary(&dest.stype());
+                    self.instruction(Instruction::AddPtr(
+                        dest,
+                        Value::Int64(*offset as i64 + fdef.offset as i64),
+                        1,
+                        fin.clone(),
+                    ));
+                    PendingResult::PlainValue(fin)
+                } else {
+                    PendingResult::SubObject(v.clone(), fdef.stype, offset + fdef.offset)
+                }
+            }
+        };
+        Ok(ret)
+    }
     fn do_postfix(&mut self) -> Result<PendingResult> {
         /*
 
         <postfix-exp> ::= <primary-exp> {postfixop}
-        <postfixop> = "++" | "--" | "[" <exp> "]"
+        <postfixop> = "++" | "--" | "[" <exp> "]" |"." <id> | "->" <id>
         */
         let mut primary = self.do_primary()?;
+
         loop {
             let token = self.peek()?;
             match token {
                 Token::LeftBracket => primary = self.process_index(&primary)?,
                 Token::PlusPlus | Token::MinusMinus => {
                     primary = self.do_post_dec_inc(&primary)?;
+                }
+                Token::Dot => {
+                    println!("dot primary {:?}", primary);
+                    self.next_token()?;
+                    primary = self.handle_dot(&primary)?;
+                    // let field = expect!(self, Token::Identifier);
+                    // println!("dot {:?}", field);
+                    // //let stype = primary.get_type();
+                    // let fdef = Self::get_struct_member(primary.clone(), &field)?;
+                    // println!("fdef {:?}", fdef);
+                    // // if let SymbolType::Struct(sdef) = stype.clone() {
+                    // //     if let Some(fdef) = sdef.borrow().members.get(&field) {
+                    // match primary {
+                    //     PendingResult::PlainValue(v) => {
+                    //         // let ftype = if fdef.stype.is_array() {
+                    //         //     SymbolType::Pointer(Box::new(fdef.stype.get_inner_type()?))
+                    //         // } else {
+                    //         //     fdef.stype.clone()
+                    //         // };
+                    //         if fdef.stype.is_array() {
+                    //             let dest = self.make_temporary(&SymbolType::Pointer(Box::new(
+                    //                 fdef.stype.get_inner_type()?,
+                    //             )));
+                    //             self.instruction(Instruction::GetAddress(v.clone(), dest.clone()));
+                    //             let fin = self.make_temporary(&dest.stype());
+                    //             self.instruction(Instruction::AddPtr(
+                    //                 dest,
+                    //                 Value::Int64(fdef.offset as i64),
+                    //                 1,
+                    //                 fin.clone(),
+                    //             ));
+                    //             primary = PendingResult::PlainValue(fin);
+                    //         } else {
+                    //             primary = PendingResult::SubObject(v, fdef.stype, fdef.offset);
+                    //         }
+                    //     }
+
+                    //     PendingResult::Dereference(v) => {
+                    //         let dest = self
+                    //             .make_temporary(&SymbolType::Pointer(Box::new(fdef.stype.clone())));
+                    //         self.instruction(Instruction::AddPtr(
+                    //             v,
+                    //             Value::Int64(fdef.offset as i64),
+                    //             1,
+                    //             dest.clone(),
+                    //         ));
+                    //         primary = PendingResult::Dereference(dest);
+                    //     }
+                    //     PendingResult::SubObject(v, stype, offset) => {
+                    //         if fdef.stype.is_array() {
+                    //             let dest = self.make_temporary(&SymbolType::Pointer(Box::new(
+                    //                 fdef.stype.get_inner_type()?,
+                    //             )));
+                    //             self.instruction(Instruction::GetAddress(v.clone(), dest.clone()));
+                    //             let fin = self.make_temporary(&dest.stype());
+                    //             self.instruction(Instruction::AddPtr(
+                    //                 dest,
+                    //                 Value::Int64(offset as i64 + fdef.offset as i64),
+                    //                 1,
+                    //                 fin.clone(),
+                    //             ));
+                    //             primary = PendingResult::PlainValue(fin);
+                    //         } else {
+                    //             primary =
+                    //                 PendingResult::SubObject(v, fdef.stype, offset + fdef.offset);
+                    //         }
+                    //     }
+                    // }
+                    println!("dot {:?}", primary);
+                    // } else {
+                    //     bail!("Expected struct, got {:?}", stype);
+                    // }
+                }
+                Token::Arrow => {
+                    self.next_token()?;
+                    if !primary.is_pointer() {
+                        bail!("Expected pointer, got {:?}", primary);
+                    }
+                    let primary_rv = self.make_rvalue(&primary)?;
+
+                    primary = self.handle_dot(&PendingResult::Dereference(primary_rv))?;
+                    //self.handle_dot(&primary)?;
+                    // let field = expect!(self, Token::Identifier);
+                    // println!("{:?} -> {}", primary, field);
+                    // let stype = primary.get_type();
+                    // if let SymbolType::Pointer(sym) = stype.clone() {
+                    //     if !sym.is_struct() {
+                    //         bail!("Expected structx, got {:?}", sym);
+                    //     }
+                    //     let sdef = sym.as_struct().unwrap();
+                    //     if let Some(fdef) = sdef.borrow().members.iter().find(|m| m.name == field) {
+                    //         println!("arrow {:?}", primary);
+                    //         let dest = self
+                    //             .make_temporary(&SymbolType::Pointer(Box::new(fdef.stype.clone())));
+                    //         let prv = self.make_rvalue(&primary)?;
+                    //         self.instruction(Instruction::AddPtr(
+                    //             prv,
+                    //             Value::Int64(fdef.offset as i64),
+                    //             1,
+                    //             dest.clone(),
+                    //         ));
+                    //         primary = PendingResult::Dereference(dest);
+                    //     } else {
+                    //         bail!("Field {} not found in struct {}", field, sdef.borrow().name);
+                    //     }
+                    // };
                 }
                 _ => {
                     break;

@@ -1,4 +1,8 @@
-use std::collections::HashMap;
+use std::{
+    cell::RefCell,
+    collections::{BTreeMap, HashMap},
+    rc::Rc,
+};
 
 use enum_as_inner::EnumAsInner;
 
@@ -8,6 +12,7 @@ pub struct TackyProgram {
     pub functions: Vec<Function>,
     pub static_variables: HashMap<String, StaticVariable>,
     pub static_constants: HashMap<String, StaticConstant>,
+    pub structs: HashMap<String, StructurePtr>,
     current_function: usize,
 }
 #[derive(Debug)]
@@ -33,6 +38,7 @@ pub enum Instruction {
     Store(Value, Value),
     AddPtr(Value, Value, isize, Value),
     CopyToOffset(Value, Value, usize),
+    CopyFromOffset(Value, usize, Value),
 }
 #[derive(Debug, PartialEq)]
 
@@ -80,24 +86,35 @@ pub enum Value {
 pub enum PendingResult {
     PlainValue(Value),
     Dereference(Value),
+    SubObject(Value, SymbolType, usize),
 }
 impl PendingResult {
     pub fn is_pointer(&self) -> bool {
         match self {
             PendingResult::PlainValue(v) => v.is_pointer() || v.is_array(),
             PendingResult::Dereference(v) => v.is_pointer() || v.is_array(),
+            PendingResult::SubObject(_, v, _) => v.is_pointer() || v.is_array(),
         }
     }
     pub fn is_array(&self) -> bool {
         match self {
             PendingResult::PlainValue(v) => v.is_array(),
             PendingResult::Dereference(v) => v.is_array(),
+            PendingResult::SubObject(_, v, _) => v.is_array(),
         }
     }
     pub fn is_string(&self) -> bool {
         match self {
             PendingResult::PlainValue(v) => matches!(v, Value::String(_)),
             PendingResult::Dereference(v) => matches!(v, Value::String(_)),
+            PendingResult::SubObject(_, v, _) => unreachable!(),
+        }
+    }
+    pub fn get_type(&self) -> SymbolType {
+        match self {
+            PendingResult::PlainValue(v) => v.stype(),
+            PendingResult::Dereference(v) => v.stype(),
+            PendingResult::SubObject(_, v, _) => v.clone(),
         }
     }
 }
@@ -130,6 +147,9 @@ impl Value {
     pub fn is_scalar(&self) -> bool {
         Parser::is_scalar(&self.stype())
     }
+    pub fn is_struct(&self) -> bool {
+        matches!(self, Value::Variable(_, SymbolType::Struct(_)))
+    }
 }
 #[derive(Debug)]
 pub struct Function {
@@ -151,7 +171,7 @@ pub enum StaticInit {
     InitChar(i8),
     InitUChar(u8),
     PointerInit(String),
-    InitNone,
+    InitNone(usize),
 }
 #[derive(Debug, Clone)]
 pub struct StaticVariable {
@@ -170,6 +190,23 @@ pub struct StaticConstant {
     pub init: Vec<StaticInit>,
     pub align: usize,
 }
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Structure {
+    pub name: String,
+    pub unique_name: String,
+    pub members: Vec<StructMember>,
+
+    pub size: usize,
+    pub alignment: usize,
+}
+pub type StructurePtr = Rc<RefCell<Structure>>;
+#[derive(Debug, Clone, PartialEq)]
+pub struct StructMember {
+    pub name: String,
+    pub stype: SymbolType,
+    pub offset: usize,
+}
 impl Default for TackyProgram {
     fn default() -> Self {
         Self::new()
@@ -183,6 +220,7 @@ impl TackyProgram {
             current_function: 0,
             static_variables: HashMap::new(),
             static_constants: HashMap::new(),
+            structs: HashMap::new(),
         }
     }
     pub fn add_static_variable(
@@ -261,20 +299,21 @@ impl TackyProgram {
                 SymbolType::Pointer(_) => AssemblyType::QuadWord,
                 SymbolType::Array(_, _) => todo!(), // TODO
                 SymbolType::Void => unreachable!("Void type should not be used in assembly"),
+                SymbolType::Struct(_) => todo!(), // TODO
             },
             Value::Void => unreachable!("Void type should not be used in assembly"),
             //   SymbolType::Void => unreachable!("Void type should not be used in assembly"),
         }
     }
     pub(crate) fn add_instruction(&mut self, instruction: Instruction) {
-        if let Instruction::Copy(v1, v2) = &instruction {
-            assert!(
-                Self::get_assembly_type(v1) == Self::get_assembly_type(v2),
-                "Copy instruction types do not match: {:?} {:?}",
-                v1,
-                v2
-            );
-        }
+        // if let Instruction::Copy(v1, v2) = &instruction {
+        //     assert!(
+        //         Self::get_assembly_type(v1) == Self::get_assembly_type(v2),
+        //         "Copy instruction types do not match: {:?} {:?}",
+        //         v1,
+        //         v2
+        //     );
+        // }
         self.functions[self.current_function]
             .instructions
             .push(instruction);
@@ -302,6 +341,19 @@ impl TackyProgram {
                 static_constant.stype,
             );
         }
+
+        // for structure in self.structs.values() {
+        //     println!(
+        //         "Structure: {} Unique Name: {} Size: {} Alignment: {}",
+        //         structure.name, structure.unique_name, structure.size, structure.alignment
+        //     );
+        //     for (name, member) in &structure.members {
+        //         println!(
+        //             "  Member: {} Offset: {} Type: {:?}",
+        //             name, member.offset, member.stype
+        //         );
+        //     }
+        // }
         for function in &self.functions {
             println!(
                 "Function: {:?} {}({:?}) global:{}",
@@ -375,6 +427,9 @@ impl TackyProgram {
                     }
                     Instruction::CopyToOffset(src, dest, offset) => {
                         println!("      CopyToOffset {:?} {:?} {:?}", src, dest, offset);
+                    }
+                    Instruction::CopyFromOffset(src, offset, dest) => {
+                        println!("      CopyFromOffset {:?} {:?} {:?}", src, offset, dest);
                     }
                 }
             }

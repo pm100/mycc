@@ -1,7 +1,16 @@
+use std::{
+    cell::RefCell,
+    cmp::max,
+    collections::{BTreeMap, HashMap},
+    rc::Rc,
+};
+
 use crate::{
+    expect,
     lexer::Token,
     parser::Parser,
     symbols::{Specifiers, SymbolType},
+    tacky::{StructMember, Structure},
 };
 use anyhow::{bail, Result};
 use enum_as_inner::EnumAsInner;
@@ -328,10 +337,29 @@ impl Parser {
         let mut double = false;
         let mut char = false;
         let mut void = false;
+        let mut structure = false;
 
         loop {
             let token = self.peek()?;
             match token {
+                Token::Struct => {
+                    self.next_token()?;
+                    if structure {
+                        bail!("Duplicate struct specifier");
+                    }
+                    structure = true;
+                    let name = expect!(self, Token::Identifier);
+                    let is_pointer = self.peek()? == Token::Multiply;
+                    if let Some((_, unique_name)) = self.lookup_struct(&name) {
+                        let sdef = self.tacky.structs.get(&unique_name).unwrap();
+                        if sdef.borrow().size == 0 && !is_pointer && !specifiers.is_external {
+                            bail!("Struct {} is incomplete", name);
+                        }
+                        specifiers.specified_type = Some(SymbolType::Struct(sdef.clone()));
+                    } else {
+                        bail!("Unknown struct name: {}", name);
+                    }
+                }
                 Token::Double => {
                     if int || long || long_long || char || signed || unsigned {
                         bail!("integer types and double cannot be used together");
@@ -437,6 +465,12 @@ impl Parser {
                 _ => break,
             };
         }
+        if structure {
+            if int || long || long_long || char || signed || unsigned || double {
+                bail!("other types and struct cannot be used together");
+            }
+            return Ok(specifiers);
+        }
         if void {
             if int || long || long_long || char || signed || unsigned || double {
                 bail!("integer types and void cannot be used together");
@@ -488,5 +522,99 @@ impl Parser {
         }
         println!("specifiers {:?}", specifiers);
         Ok(specifiers)
+    }
+    pub fn parse_struct(&mut self) -> Result<()> {
+        self.next_token()?;
+
+        let name = expect!(self, Token::Identifier);
+        let new_name = format!("{}${}", name, self.tacky.structs.len());
+        let mut structure = Structure {
+            name: name.to_string(),
+            members: Vec::new(),
+            unique_name: new_name.clone(),
+            size: 0,
+            alignment: 0,
+        };
+        let sptr = Rc::new(RefCell::new(structure.clone()));
+        println!("struct name {:?} {}", name, new_name);
+        self.tacky.structs.insert(new_name.clone(), sptr.clone());
+        //  let mut structure = sptr.borrow_mut();
+        // self.expect(Token::LeftBrace)?;
+        if self.peek()? == Token::LeftBrace {
+            if let Some(s) = self.lookup_struct(&name) {
+                if s.0 {
+                    bail!("Struct {} already defined", name);
+                }
+                //res = s.1.clone();
+            }
+            self.struct_lookup
+                .last_mut()
+                .unwrap()
+                .insert(name.to_string(), (true, new_name.clone()));
+            // }
+            self.dump_struct_map();
+            // self.struct_lookup
+            //     .last_mut()
+            //     .unwrap()
+            //     .get_mut(&name)
+            //     .unwrap()
+            //     .0 = true;
+            self.next_token()?;
+            let mut offset = 0;
+            let mut largest = SymbolType::Char;
+            loop {
+                if self.peek()? == Token::RightBrace {
+                    self.next_token()?;
+                    break;
+                }
+                let specifiers = self.parse_specifiers(false)?;
+                let decl = self.parse_declarator()?;
+                println!("declaration {:?}", decl);
+                self.expect(Token::SemiColon)?;
+                let (member_name, member_type, _) =
+                    Self::process_declarator(&decl, &specifiers.specified_type.unwrap())?;
+                {
+                    let structure = sptr.borrow();
+                    if structure.members.iter().any(|m| m.name == member_name) {
+                        bail!("Duplicate member name: {}", member_name);
+                    }
+                }
+                // println!("declaration {:?}", res);
+                offset += self.pad(&member_type, offset);
+
+                let member = StructMember {
+                    name: member_name.clone(),
+                    stype: member_type.clone(),
+                    offset: offset,
+                };
+                let align = self.get_alignment(&member_type);
+                let size = Self::get_total_object_size(&member_type)?;
+                offset += size;
+                if align > Self::get_total_object_size(&largest)? {
+                    largest = member_type;
+                }
+                let mut structure = sptr.borrow_mut();
+                structure.members.push(member);
+            }
+            offset += self.pad(&largest, offset);
+            let mut structure = sptr.borrow_mut();
+            structure.size = offset;
+            structure.alignment = self.get_alignment(&largest);
+            if offset == 0 {
+                bail!("Empty struct");
+            }
+        } else {
+            self.struct_lookup
+                .last_mut()
+                .unwrap()
+                .insert(name.to_string(), (true, new_name.clone()));
+        }
+        println!("struct {:?}", sptr.borrow());
+        // self.tacky
+        //     .structs
+        //     .insert(new_name.clone(), Rc::new(RefCell::new(structure)));
+        self.expect(Token::SemiColon)?;
+
+        Ok(())
     }
 }

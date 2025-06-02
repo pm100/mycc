@@ -1,9 +1,12 @@
-use std::collections::HashMap;
+use std::{cell::RefCell, collections::HashMap, fmt, rc::Rc};
 
 use anyhow::{bail, Result};
 use enum_as_inner::EnumAsInner;
 
-use crate::{parser::Parser, tacky::StaticInit};
+use crate::{
+    parser::Parser,
+    tacky::{StaticInit, StructurePtr},
+};
 
 #[derive(Debug, Clone)]
 pub(crate) struct VariableName {
@@ -16,7 +19,7 @@ pub struct Specifiers {
     pub is_external: bool,
     pub specified_type: Option<SymbolType>,
 }
-#[derive(Debug, Clone, PartialEq, EnumAsInner)]
+#[derive(Clone, EnumAsInner)]
 pub enum SymbolType {
     Int32,
     Int64,
@@ -30,6 +33,7 @@ pub enum SymbolType {
     Function(Vec<SymbolType>, Box<SymbolType>),
     Pointer(Box<SymbolType>),
     Array(Box<SymbolType>, usize),
+    Struct(StructurePtr),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -62,6 +66,69 @@ pub struct Extern {
     pub value: Vec<StaticInit>,
     pub stype: SymbolType,
 }
+// #[derive(Debug, Clone, PartialEq)]
+// pub struct Structure {
+//     pub name: String,
+//     pub unique_name: String,
+//     pub members: HashMap<String, StructMember>,
+
+//     pub size: usize,
+//     pub alignment: usize,
+// }
+// //type StructurePtr = Rc<RefCell<Structure>>;
+// #[derive(Debug, Clone, PartialEq)]
+// pub struct StructMember {
+//     pub name: String,
+//     pub stype: SymbolType,
+//     pub offset: usize,
+// }
+impl PartialEq for SymbolType {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (SymbolType::Int32, SymbolType::Int32) => true,
+            (SymbolType::Int64, SymbolType::Int64) => true,
+            (SymbolType::UInt32, SymbolType::UInt32) => true,
+            (SymbolType::UInt64, SymbolType::UInt64) => true,
+            (SymbolType::Double, SymbolType::Double) => true,
+            (SymbolType::Char, SymbolType::Char) => true,
+            (SymbolType::SChar, SymbolType::SChar) => true,
+            (SymbolType::UChar, SymbolType::UChar) => true,
+            (SymbolType::Void, SymbolType::Void) => true,
+            (SymbolType::Function(args1, ret1), SymbolType::Function(args2, ret2)) => {
+                args1 == args2 && ret1 == ret2
+            }
+            (SymbolType::Pointer(t1), SymbolType::Pointer(t2)) => t1 == t2,
+            (SymbolType::Array(t1, sz1), SymbolType::Array(t2, sz2)) => t1 == t2 && sz1 == sz2,
+            (SymbolType::Struct(s1), SymbolType::Struct(s2)) => {
+                s1.borrow().unique_name == s2.borrow().unique_name
+            }
+            _ => false,
+        }
+    }
+}
+impl fmt::Debug for SymbolType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SymbolType::Int32 => write!(f, "int32"),
+            SymbolType::Int64 => write!(f, "int64"),
+            SymbolType::UInt32 => write!(f, "uint32"),
+            SymbolType::UInt64 => write!(f, "uint64"),
+            SymbolType::Double => write!(f, "double"),
+            SymbolType::Char => write!(f, "char"),
+            SymbolType::SChar => write!(f, "schar"),
+            SymbolType::UChar => write!(f, "uchar"),
+            SymbolType::Void => write!(f, "void"),
+            SymbolType::Function(args, ret) => {
+                write!(f, "function({:?}) -> {:?}", args, ret)
+            }
+            SymbolType::Pointer(t) => write!(f, "*{:?}", t),
+            SymbolType::Array(t, sz) => write!(f, "[{:?}; {}]", t, sz),
+            SymbolType::Struct(s) => {
+                write!(f, "struct {} ({})", s.borrow().unique_name, s.borrow().name)
+            }
+        }
+    }
+}
 impl SymbolType {
     pub fn is_integer(&self) -> bool {
         Parser::is_integer(self)
@@ -77,6 +144,9 @@ impl SymbolType {
     }
     pub fn is_void_pointer(&self) -> bool {
         matches!(self, SymbolType::Pointer(t) if t.is_void())
+    }
+    pub fn is_scalar(&self) -> bool {
+        Parser::is_scalar(self)
     }
 }
 impl Parser {
@@ -130,6 +200,9 @@ impl Parser {
             let inner = Self::get_array_type(stype)?;
             let size = Self::get_total_object_size(&inner)?;
             Ok(dim * size)
+        } else if stype.is_struct() {
+            let sdef = stype.as_struct().unwrap().borrow().size;
+            Ok(sdef)
         } else {
             let size = Self::get_size_of_stype(stype);
             Ok(size)

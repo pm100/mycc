@@ -24,6 +24,7 @@ pub enum Instruction {
     Cvttsdsi(AssemblyType, Operand, Operand),
     Cvtsi2sd(AssemblyType, Operand, Operand),
     Lea(Operand, Operand),
+    CopyBlock(Operand, Operand, usize),
 }
 #[derive(Debug, Clone)]
 pub enum UnaryOperator {
@@ -68,7 +69,7 @@ pub enum Operand {
     // ImmediateF64(f64),
     Pseudo(String),
     Memory(Register, i32),
-    Data(String),
+    Data(String, usize),
     PseudoMem(String, usize, usize, usize), // name, size, offset, alignment
     Indexed(Register, Register, usize),
 }

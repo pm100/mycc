@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use anyhow::Result;
 
-use crate::tacky::{StaticConstant, StaticVariable};
+use crate::tacky::{StaticConstant, StaticVariable, Structure};
 
 use super::moira_inst::Instruction;
 
@@ -11,6 +11,7 @@ pub struct MoiraProgram {
     pub functions: Vec<Function>,
     pub top_vars: Vec<StaticVariable>,
     pub static_constants: HashMap<String, StaticConstant>,
+    pub structure_defs: HashMap<String, Structure>,
     current_function: usize,
 }
 #[derive(Debug, Clone)]
@@ -32,6 +33,7 @@ impl MoiraProgram {
             functions: Vec::new(),
             top_vars: Vec::new(),
             static_constants: HashMap::new(),
+            structure_defs: HashMap::new(),
             current_function: 0,
         }
     }

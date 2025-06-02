@@ -1,10 +1,36 @@
 use std::mem::discriminant;
 
 use anyhow::{bail, Result};
+use backtrace::Symbol;
 
 use crate::{lexer::Token, parser::Parser, symbols::SymbolType, tacky::Value};
 
 impl Parser {
+    pub fn pad(&mut self, stype: &SymbolType, offset: usize) -> usize {
+        let alignment = self.get_alignment(stype);
+        if offset % alignment == 0 {
+            0
+        } else {
+            alignment - (offset % alignment)
+        }
+    }
+    pub fn get_alignment(&mut self, stype: &SymbolType) -> usize {
+        match stype {
+            SymbolType::Int32 => 4,
+            SymbolType::Int64 => 8,
+            SymbolType::UInt32 => 4,
+            SymbolType::UInt64 => 8,
+            SymbolType::Double => 8,
+            SymbolType::Char => 1,
+            SymbolType::UChar => 1,
+            SymbolType::SChar => 1,
+            SymbolType::Void => 0,
+            SymbolType::Array(stype, _) => self.get_alignment(&*stype),
+            SymbolType::Struct(s) => s.borrow().alignment,
+            SymbolType::Pointer(_) => 8,
+            _ => panic!("Unknown type"),
+        }
+    }
     pub fn is_arithmetic(stype: &SymbolType) -> bool {
         matches!(
             stype,
@@ -21,7 +47,10 @@ impl Parser {
     pub fn is_scalar(stype: &SymbolType) -> bool {
         !matches!(
             stype,
-            SymbolType::Array(_, _) | SymbolType::Void | SymbolType::Function(_, _)
+            SymbolType::Array(_, _)
+                | SymbolType::Void
+                | SymbolType::Function(_, _)
+                | SymbolType::Struct(_)
         )
     }
     pub fn is_integer(stype: &SymbolType) -> bool {
