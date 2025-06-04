@@ -352,11 +352,12 @@ impl Parser {
                     let is_pointer = self.peek()? == Token::Multiply;
                     if let Some((_, unique_name)) = self.lookup_struct(&name) {
                         let sdef = self.tacky.structs.get(&unique_name).unwrap();
-                        if sdef.borrow().size == 0 && !is_pointer && !specifiers.is_external {
-                            bail!("Struct {} is incomplete", name);
-                        }
+                        // if sdef.borrow().size == 0 && !is_pointer && !specifiers.is_external {
+                        //     bail!("Struct {} is incomplete", name);
+                        // }
                         specifiers.specified_type = Some(SymbolType::Struct(sdef.clone()));
                     } else {
+                        self.dump_struct_map();
                         bail!("Unknown struct name: {}", name);
                     }
                 }
@@ -527,26 +528,74 @@ impl Parser {
         self.next_token()?;
 
         let name = expect!(self, Token::Identifier);
-        let new_name = format!("{}${}", name, self.tacky.structs.len());
-        let mut structure = Structure {
-            name: name.to_string(),
-            members: Vec::new(),
-            unique_name: new_name.clone(),
-            size: 0,
-            alignment: 0,
+        let sptr = if let Some((in_this_scope, unique_name)) = self.lookup_struct(&name) {
+            // we already know this name
+
+            // is it a potential dup
+            if in_this_scope {
+                let sdef = self.tacky.structs.get(&unique_name).unwrap().clone();
+                if sdef.borrow().size > 0 && self.peek()? == Token::LeftBrace {
+                    // already defined, but not empty
+
+                    bail!("Struct {} already defined", name);
+                }
+                sdef.clone()
+            } else {
+                // we are shadowing a previous definition
+                let new_name = format!("{}${}", name, self.tacky.structs.len());
+                let structure = Structure {
+                    name: name.to_string(),
+                    members: Vec::new(),
+                    unique_name: new_name.clone(),
+                    size: 0,
+                    alignment: 0,
+                };
+                Rc::new(RefCell::new(structure.clone()))
+            }
+        } else {
+            let new_name = format!("{}${}", name, self.tacky.structs.len());
+            let structure = Structure {
+                name: name.to_string(),
+                members: Vec::new(),
+                unique_name: new_name.clone(),
+                size: 0,
+                alignment: 0,
+            };
+            Rc::new(RefCell::new(structure.clone()))
         };
-        let sptr = Rc::new(RefCell::new(structure.clone()));
-        println!("struct name {:?} {}", name, new_name);
+        let new_name = sptr.borrow().unique_name.clone();
         self.tacky.structs.insert(new_name.clone(), sptr.clone());
+        //let new_name = format!("{}${}", name, self.tacky.structs.len());
+
+        // println!("struct name {:?} {}", name, new_name);
+        // if let Some(s) = self.lookup_struct(&name) {
+        //     let sdef = self.tacky.structs.get(&s.1).unwrap();
+        //     if sdef.borrow().size > 0 {
+        //         // already defined, but not empty
+        //         if self.peek()? == Token::LeftBrace {
+        //             bail!("Struct {} already defined", name);
+        //         }
+        //     }
+        //     self.tacky.structs.insert(s.1.clone(), sdef.clone());
+        //     sdef
+        //     // if s.0 {
+        //     //     bail!("Struct {} already defined", name);
+        //     // }
+        //     //res = s.1.clone();
+        // } else {
+        //     let sptr = Rc::new(RefCell::new(structure.clone()));
+        //     self.tacky.structs.insert(new_name.clone(), sptr.clone());
+        // }
+        // let structure = Structure {
+        //     name: name.to_string(),
+        //     members: Vec::new(),
+        //     unique_name: new_name.clone(),
+        //     size: 0,
+        //     alignment: 0,
+        // };
         //  let mut structure = sptr.borrow_mut();
         // self.expect(Token::LeftBrace)?;
         if self.peek()? == Token::LeftBrace {
-            if let Some(s) = self.lookup_struct(&name) {
-                if s.0 {
-                    bail!("Struct {} already defined", name);
-                }
-                //res = s.1.clone();
-            }
             self.struct_lookup
                 .last_mut()
                 .unwrap()

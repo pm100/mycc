@@ -1040,6 +1040,11 @@ impl X64BackEnd {
 
         let align = X64CodeGenerator::calculate_alignment(symbol_type);
         let total_size = Parser::get_total_object_size(symbol_type).unwrap();
+        if self.moira.top_vars.iter().any(|v| v.name == *name)
+            || self.moira.static_constants.contains_key(name)
+        {
+            return (Operand::Data(name.clone(), offset), symbol_type.clone());
+        }
         (
             Operand::PseudoMem(name.clone(), total_size, offset, align),
             symbol_type.clone(),

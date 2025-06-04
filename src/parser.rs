@@ -444,6 +444,13 @@ impl Parser {
         {
             bail!("Variable type cannot be 'void'");
         }
+
+        if let SymbolType::Struct(sdef) = symbol_type {
+            if sdef.borrow().size == 0 && !explicit_external {
+                bail!("Struct {} is incompletexx", name);
+            }
+        }
+
         //if specifiers.specified_type.is
         let symbol_type = symbol_type.clone(); //specifiers.specified_type.clone().unwrap().clone();
         let token = self.peek()?;
@@ -1858,7 +1865,11 @@ impl Parser {
         self.local_variables.push(newmap);
     }
     fn push_new_structmap(&mut self) {
-        let newmap = self.struct_lookup[0]
+        println!("push_new_structmap {:?}", self.struct_lookup.len());
+        let newmap = self
+            .struct_lookup
+            .last()
+            .unwrap()
             .iter()
             .map(|(k, v)| {
                 let mut v = v.clone();

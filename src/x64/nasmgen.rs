@@ -1295,7 +1295,8 @@ impl X64CodeGenerator {
                     "Fixing pseudo operand: {:?} assembly_type: {:?} align: {}",
                     operand, assembly_type, align
                 );
-                // assert!(pseudo_name.contains('$'));
+                assert!(pseudo_name.contains('$'));
+                //  if self.moira.top_vars.iter().any(|v| v.name == pseudo_name) {
                 if pseudo_name.contains('$') {
                     let stack_offset = self.lookup_pseudo(pseudo_name, *total_size as i32, *align);
                     Operand::Memory(Register::RBP, -stack_offset + *offset as i32)
