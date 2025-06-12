@@ -217,7 +217,24 @@ impl Parser {
         } else {
             true
         };
-
+        if definition {
+            if !stype.is_function() {
+                bail!("Function {} must be a function type", name);
+            }
+            let (args_types, ret_type) = stype.as_function().unwrap();
+            if let SymbolType::Struct(sdef) = ret_type.as_ref() {
+                if sdef.borrow().size == 0 {
+                    bail!("Struct {} is incomplete", name);
+                }
+            }
+            for arg_type in args_types.iter() {
+                if let SymbolType::Struct(sdef) = arg_type {
+                    if sdef.borrow().size == 0 {
+                        bail!("Struct {} is incomplete", name);
+                    }
+                }
+            }
+        }
         // have we already seen this function before
         let new_func = if let Some((ref mut found, top)) = self.lookup_symbol(name) {
             if linkage == SymbolLinkage::None {
@@ -373,6 +390,12 @@ impl Parser {
                     is_current: true,
                 },
             );
+            // let arg_type = if arg_type.is_struct() && Self::get_total_object_size(&arg_type)? > 8 {
+            //     let x = arg_type.as_struct().unwrap().clone();
+            //     SymbolType::StructArg(x)
+            // } else {
+            //     arg_type.clone()
+            // };
             let symbol = Symbol {
                 name: arg_name.to_string(),
                 state: SymbolState::Defined,
@@ -447,7 +470,14 @@ impl Parser {
 
         if let SymbolType::Struct(sdef) = symbol_type {
             if sdef.borrow().size == 0 && !explicit_external {
-                bail!("Struct {} is incompletexx", name);
+                bail!("Struct {} is incomplete", name);
+            }
+        }
+        if let SymbolType::Array(atype, _) = symbol_type {
+            if let SymbolType::Struct(sdef) = atype.as_ref() {
+                if sdef.borrow().size == 0 && !explicit_external {
+                    bail!("Struct {} is incomplete", name);
+                }
             }
         }
 
@@ -883,6 +913,9 @@ impl Parser {
                     //  let elem_offset = offset + (idx * Self::get_total_object_size(&atype)?);
                     values.extend(self.process_static_initializer(value, 0, elem_init, atype)?);
                 }
+                if ci.len() > *size {
+                    bail!("Initializer for array {:?} too long", value);
+                }
                 if ci.len() < *size {
                     // fill the rest with zeros
 
@@ -1026,6 +1059,9 @@ impl Parser {
                 for (idx, elem_init) in ci.iter().enumerate() {
                     let elem_offset = offset + (idx * Self::get_total_object_size(&atype)?);
                     self.process_auto_initializer(value, elem_offset, elem_init, atype)?;
+                }
+                if ci.len() > *size {
+                    bail!("Initializer for array {:?} too long", value);
                 }
                 if ci.len() < *size {
                     // fill the rest with zeros

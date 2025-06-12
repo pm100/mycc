@@ -33,7 +33,8 @@ pub enum SymbolType {
     Function(Vec<SymbolType>, Box<SymbolType>),
     Pointer(Box<SymbolType>),
     Array(Box<SymbolType>, usize),
-    Struct(StructurePtr),
+    Struct(StructurePtr), // true means arg_ptr
+                          //StructArg(StructurePtr),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -102,6 +103,7 @@ impl PartialEq for SymbolType {
             (SymbolType::Struct(s1), SymbolType::Struct(s2)) => {
                 s1.borrow().unique_name == s2.borrow().unique_name
             }
+
             _ => false,
         }
     }
@@ -125,7 +127,14 @@ impl fmt::Debug for SymbolType {
             SymbolType::Array(t, sz) => write!(f, "[{:?}; {}]", t, sz),
             SymbolType::Struct(s) => {
                 write!(f, "struct {} ({})", s.borrow().unique_name, s.borrow().name)
-            }
+            } // SymbolType::Struct(s, true) => {
+              //     write!(
+              //         f,
+              //         "struct_arg {} ({})",
+              //         s.borrow().unique_name,
+              //         s.borrow().name
+              //     )
+              // }
         }
     }
 }
@@ -168,6 +177,7 @@ impl Parser {
             SymbolType::Pointer(t) => Ok(*t.clone()),
             SymbolType::Array(t, _) => Ok(*t.clone()),
             SymbolType::Function(_, t) => Ok(*t.clone()),
+            // SymbolType::StructArg(sdef) => Ok(sdef.clone()),
             _ => bail!("Not a pointer or array type"),
         }
     }
@@ -194,19 +204,27 @@ impl Parser {
         }
     }
     pub fn get_total_object_size(stype: &SymbolType) -> Result<usize> {
-        if stype.is_array() {
-            let dim = Self::get_array_size(stype)?;
+        let size = match stype {
+            SymbolType::Array(_, _) => {
+                let dim = Self::get_array_size(stype)?;
 
-            let inner = Self::get_array_type(stype)?;
-            let size = Self::get_total_object_size(&inner)?;
-            Ok(dim * size)
-        } else if stype.is_struct() {
-            let sdef = stype.as_struct().unwrap().borrow().size;
-            Ok(sdef)
-        } else {
-            let size = Self::get_size_of_stype(stype);
-            Ok(size)
-        }
+                let inner = Self::get_array_type(stype)?;
+                let size = Self::get_total_object_size(&inner)?;
+                dim * size
+            }
+            SymbolType::Struct(_) => {
+                let size = stype.as_struct().unwrap().borrow().size;
+                if size == 0 {
+                    bail!("Structure {:?} is incomplete", stype);
+                }
+                size
+            } // SymbolType::StructArg(_) => stype.as_struct_arg().unwrap().borrow().size,
+            _ => {
+                let size = Self::get_size_of_stype(stype);
+                size
+            }
+        };
+        Ok(size)
     }
 
     pub fn get_array_count_and_type(stype: &SymbolType) -> Result<(usize, SymbolType)> {

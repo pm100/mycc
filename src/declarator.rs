@@ -94,6 +94,14 @@ impl Parser {
                     }
                     pnames.push(name);
                     let ptype = Self::decay_arg(&ptype);
+                    let ptype = if ptype.is_struct()
+                    /*&& Self::get_total_object_size(&ptype)? > 8 */
+                    {
+                        let x = ptype.as_struct().unwrap().clone();
+                        SymbolType::Struct(x)
+                    } else {
+                        ptype.clone()
+                    };
                     ptypes.push(ptype);
                 }
                 if base_type.is_array() {

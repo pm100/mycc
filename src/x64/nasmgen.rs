@@ -5,6 +5,7 @@ use crate::x64::moira::{Function, MoiraProgram};
 //use crate::codegen::MoiraCompiler;
 use crate::tacky::StaticInit;
 use anyhow::Result;
+use backtrace::Symbol;
 use std::collections::HashMap;
 use std::io::Write;
 use std::{io::BufWriter, path::Path};
@@ -125,7 +126,8 @@ impl X64CodeGenerator {
                     SymbolType::Int64 | SymbolType::UInt64 | SymbolType::Pointer(_) => 8,
                     SymbolType::Double => 16,
                     SymbolType::Char | SymbolType::UChar | SymbolType::SChar => 1, // is it tho?
-                    _ => unreachable!(),
+                    SymbolType::Struct(sdef) => sdef.borrow().alignment,
+                    _ => todo!(),
                 }
             }
             SymbolType::Struct(sdef) => {
@@ -323,7 +325,11 @@ impl X64CodeGenerator {
         if function.global {
             writeln!(writer, "global {}", function.name)?;
         }
-        let adjust = self.next_offset % 16;
+        // ensure stack is 16 byte aligned
+        let mut adjust = self.next_offset % 16;
+        if adjust != 0 {
+            adjust = 16 - adjust;
+        }
         writeln!(writer, "{}: ", function.name)?;
         writeln!(writer, "        push rbp")?;
         writeln!(writer, "        mov rbp, rsp")?;
@@ -456,6 +462,10 @@ impl X64CodeGenerator {
                 let operand_str = self.get_operand(operand, &AssemblyType::QuadWord)?;
                 writeln!(writer, "        push {}", operand_str)?;
             }
+            Instruction::Pop(operand) => {
+                let operand_str = self.get_operand(operand, &AssemblyType::QuadWord)?;
+                writeln!(writer, "        pop {}", operand_str)?;
+            }
             Instruction::DeallocateStack(size) => {
                 writeln!(writer, "        add rsp, {}", size)?;
             }
@@ -490,8 +500,18 @@ impl X64CodeGenerator {
             Instruction::CopyBlock(src, dest, size) => {
                 let src_str = self.get_operand(src, &AssemblyType::ByteArray(0, 0))?;
                 let dest_str = self.get_operand(dest, &AssemblyType::ByteArray(0, 0))?;
-                writeln!(writer, "	lea	rcx, {}", src_str)?;
-                writeln!(writer, "	lea	rax, {}", dest_str)?;
+                if src.is_register() {
+                    writeln!(writer, "	mov	rcx, {}", src_str)?;
+                //    writeln!(writer, "	mov	rax, {}", dest_str)?;
+                } else {
+                    writeln!(writer, "	lea	rcx, {}", src_str)?;
+                }
+                if dest.is_register() {
+                    writeln!(writer, "	mov	rax, {}", dest_str)?;
+                } else {
+                    writeln!(writer, "	lea	rax, {}", dest_str)?;
+                }
+                //  writeln!(writer, "	lea	rax, {}", dest_str)?;
                 writeln!(writer, "	mov rdi,rax")?;
                 writeln!(writer, "	mov rsi,rcx ")?;
                 writeln!(writer, "	mov rdi,rax ")?;
@@ -503,6 +523,11 @@ impl X64CodeGenerator {
     }
 
     fn get_reg_name(register: &Register, assembly_type: &AssemblyType) -> String {
+        let assembly_type = if assembly_type == &AssemblyType::ByteArray(0, 0) {
+            AssemblyType::QuadWord
+        } else {
+            assembly_type.clone()
+        };
         let str = match (register, assembly_type) {
             (Register::RAX, AssemblyType::QuadWord) => "rax",
             (Register::RAX, AssemblyType::LongWord) => "eax",
@@ -510,10 +535,12 @@ impl X64CodeGenerator {
 
             (Register::RDX, AssemblyType::QuadWord) => "rdx",
             (Register::RDX, AssemblyType::LongWord) => "edx",
+            (Register::RDX, AssemblyType::Word) => "dx",
             (Register::RDX, AssemblyType::Byte) => "dl",
 
             (Register::RCX, AssemblyType::QuadWord) => "rcx",
             (Register::RCX, AssemblyType::LongWord) => "ecx",
+            (Register::RCX, AssemblyType::Word) => "cx",
             (Register::RCX, AssemblyType::Byte) => "cl",
 
             (Register::XMM0, _) => "xmm0",
@@ -528,17 +555,22 @@ impl X64CodeGenerator {
             (Register::XMM15, _) => "xmm15",
 
             (Register::RBP, _) => "rbp",
+            (Register::RSP, _) => "rsp",
 
             (Register::R8, AssemblyType::QuadWord) => "r8",
             (Register::R8, AssemblyType::LongWord) => "r8d",
+            (Register::R8, AssemblyType::Word) => "r8w",
             (Register::R8, AssemblyType::Byte) => "r8b",
 
             (Register::R9, AssemblyType::QuadWord) => "r9",
             (Register::R9, AssemblyType::LongWord) => "r9d",
+            (Register::R9, AssemblyType::Word) => "r9w",
+
             (Register::R9, AssemblyType::Byte) => "r9b",
 
             (Register::R10, AssemblyType::QuadWord) => "r10",
             (Register::R10, AssemblyType::LongWord) => "r10d",
+            (Register::R10, AssemblyType::Word) => "r10w",
             (Register::R10, AssemblyType::Byte) => "r10b",
 
             (Register::R11, AssemblyType::QuadWord) => "r11",
@@ -955,6 +987,11 @@ impl X64CodeGenerator {
                         self.fix_pseudo(&operand, &AssemblyType::QuadWord)?,
                     ));
                 }
+                Instruction::Pop(operand) => {
+                    new_instructions.push(Instruction::Pop(
+                        self.fix_pseudo(operand, &AssemblyType::QuadWord)?,
+                    ));
+                }
                 Instruction::Call(name) => {
                     self.func_table
                         .entry(name.clone())
@@ -1256,12 +1293,15 @@ impl X64CodeGenerator {
         if let Some(offset) = self.pseudo_registers.get(pseudo_name) {
             *offset
         } else {
-            let pad = align as i32 - ((self.next_offset + size) % align as i32);
+            let mut pad = (self.next_offset + size) % align as i32;
+            if pad > 0 {
+                pad = align as i32 - pad;
+            }
             let old_off = self.next_offset;
             self.next_offset += size + pad;
             println!(
-                "Allocating pseudo register {} at offset {} (align={}, pad={} old-off={}",
-                pseudo_name, self.next_offset, align, pad, old_off
+                "Allocating pseudo register {} at offset {} (align={}, pad={} old-off={} size ={}",
+                pseudo_name, self.next_offset, align, pad, old_off, size
             );
             self.pseudo_registers
                 .insert(pseudo_name.to_string(), self.next_offset);

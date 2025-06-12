@@ -18,6 +18,7 @@ use super::{
 pub struct X64BackEnd {
     moira: MoiraProgram,
     instruction_counter: usize,
+    temp_count: usize,
     const_0: String,
 }
 
@@ -34,6 +35,7 @@ impl X64BackEnd {
             moira: MoiraProgram::new(),
             instruction_counter: 0,
             const_0: String::new(),
+            temp_count: 0,
         };
         s.const_0 = s.make_static_constant(0.0);
         s
@@ -78,9 +80,62 @@ impl X64BackEnd {
             }
             SymbolType::Void => unreachable!(),
             SymbolType::Struct(_) => AssemblyType::ByteArray(0, 0),
+            //   SymbolType::StructArg(_) => AssemblyType::QuadWord,
         }
     }
+    fn import_structure(&mut self, stype: &SymbolType, name: &str, op: &Operand) -> Result<()> {
+        assert!(matches!(stype, SymbolType::Struct(_)));
+        let size = Parser::get_total_object_size(stype)?;
+        //  Structs and unions of size 8, 16, 32, or 64 bits,
+        if !(size == 1 || size == 2 || size == 4 || size == 8) {
+            // let (src_op, stype) = self.get_block_mem(arg, 0);
+            //let stype = arg.stype().as_struct_arg().unwrap();
 
+            // let copy = self.make_temporary(&stype);
+            let align = X64CodeGenerator::calculate_alignment(stype);
+            let copy = Operand::PseudoMem(name.to_string(), size, 0, align);
+            //  let (dest_op, _dest_stype) = self.get_block_mem(&copy, 0);
+            //let align = X64CodeGenerator::calculate_alignment(stype);
+
+            self.moira(Instruction::Push(Operand::Register(Register::RCX)));
+            self.moira(Instruction::CopyBlock(op.clone(), copy.clone(), size));
+            self.moira(Instruction::Pop(Operand::Register(Register::RCX)));
+
+            // self.moira(Instruction::Lea(dest_op, reg.clone()));
+            //return Ok(());
+        } else {
+            let assembly_type = match size {
+                1 => AssemblyType::Byte,
+                2 => AssemblyType::Word,
+                4 => AssemblyType::LongWord,
+                8 => AssemblyType::QuadWord,
+                _ => unreachable!(),
+            };
+
+            self.moira(Instruction::Mov(
+                assembly_type.clone(),
+                op.clone(),
+                Operand::Pseudo(name.to_string()),
+            ));
+            //  todo!("Importing small structures not implemented yet");
+            // let assembly_type = match size {
+            //     1 => AssemblyType::Byte,
+            //     2 => AssemblyType::Word,
+            //     4 => AssemblyType::LongWord,
+            //     8 => AssemblyType::QuadWord,
+            //     _ => unreachable!(),
+            // };
+            // let (src_op, _stype, src_assembly_type) = self.get_value(arg);
+            // //let (dest_op, _dest_stype, dest_assembly_type) = self.get_value(&arg.clone());
+            // //assert!(src_assembly_type == dest_assembly_type);
+            // self.moira(Instruction::Mov(
+            //     AssemblyType::QuadWord,
+            //     src_op,
+            //     reg.clone(),
+            // ));
+        };
+        Ok(())
+    }
     /*
 
     windows x64 calling convention
@@ -103,32 +158,69 @@ impl X64BackEnd {
             Register::XMM2,
             Register::XMM3,
         ];
+        let ret_type = function.return_type.clone();
 
-        for idx in 0..function.parameters.len() {
-            if idx < int_reglist.len() {
-                let (param, stype) = &function.parameters[idx];
-                let assembly_type = Self::get_assembly_type(stype);
-                let register = if assembly_type == AssemblyType::Double {
-                    Operand::Register(float_reglist[idx].clone())
-                } else {
-                    Operand::Register(int_reglist[idx].clone())
-                };
-                self.moira(Instruction::Mov(
-                    assembly_type.clone(),
-                    register,
-                    Operand::Pseudo(param.clone()),
-                ));
+        let shunt = if ret_type.is_struct() {
+            //let (argval, arg_stype, arg_assembly_type) = self.get_value(&ret);
+            let size = Parser::get_total_object_size(&ret_type)?;
+            let register = Operand::Register(Register::RCX);
+
+            if !(size == 1 || size == 2 || size == 4 || size == 8) {
+                self.moira(Instruction::Push(register));
+                1
             } else {
-                let (param, stype) = &function.parameters[(function.parameters.len() - idx) + 3];
+                0
+            }
+        } else {
+            0
+        };
+        for idx in 0..function.parameters.len() {
+            let reg_idx = idx + shunt;
+            if reg_idx < int_reglist.len() {
+                let (param, stype) = &function.parameters[idx];
+
+                if stype.is_struct() {
+                    let reg = Operand::Register(int_reglist[reg_idx].clone());
+                    self.import_structure(stype, param, &reg)?;
+                } else {
+                    let assembly_type = Self::get_assembly_type(stype);
+                    let register = if assembly_type == AssemblyType::Double {
+                        Operand::Register(float_reglist[reg_idx].clone())
+                    } else {
+                        Operand::Register(int_reglist[reg_idx].clone())
+                    };
+                    self.moira(Instruction::Mov(
+                        assembly_type.clone(),
+                        register,
+                        Operand::Pseudo(param.clone()),
+                    ));
+                }
+            } else {
+                let (param, stype) =
+                    &function.parameters[(function.parameters.len() - reg_idx) + 3];
                 let assembly_type = Self::get_assembly_type(stype);
-                self.moira(Instruction::Mov(
-                    assembly_type.clone(),
-                    Operand::Memory(
-                        Register::RBP,
-                        ((function.parameters.len() - idx + 5) * 8) as i32,
-                    ),
-                    Operand::Pseudo(param.clone()),
-                ));
+                if stype.is_struct() {
+                    let reg = Operand::Register(Register::R10);
+                    self.moira(Instruction::Mov(
+                        assembly_type.clone(),
+                        Operand::Memory(
+                            Register::RBP,
+                            ((function.parameters.len() - idx + 5) * 8) as i32,
+                        ),
+                        reg.clone(),
+                    ));
+
+                    self.import_structure(stype, param, &reg)?;
+                } else {
+                    self.moira(Instruction::Mov(
+                        assembly_type.clone(),
+                        Operand::Memory(
+                            Register::RBP,
+                            ((function.parameters.len() - idx + 5) * 8) as i32,
+                        ),
+                        Operand::Pseudo(param.clone()),
+                    ));
+                }
             }
         }
         for instruction in &function.instructions {
@@ -148,18 +240,75 @@ impl X64BackEnd {
     fn gen_label_name(&self, label: &str) -> String {
         format!("{}_{:04}", label, self.instruction_counter)
     }
+    fn make_temporary(&mut self, stype: &SymbolType) -> tacky::Value {
+        let temp_name = format!("ARG${}", self.temp_count);
+        self.temp_count += 1;
+        tacky::Value::Variable(temp_name.clone(), stype.clone())
+    }
+    fn clone_struct(&mut self, arg: &tacky::Value, reg: &Operand) -> Result<()> {
+        assert!(matches!(arg.stype(), SymbolType::Struct(_)));
+        let size = Parser::get_total_object_size(&arg.stype())?;
+        if !(size == 1 || size == 2 || size == 4 || size == 8) {
+            let (src_op, stype) = self.get_block_mem(arg, 0);
+            //let stype = arg.stype().as_struct_arg().unwrap();
+
+            let copy = self.make_temporary(&stype);
+            //   let (argval, _arg_stype, arg_assembly_type) = self.get_value(arg);
+            // let temp_name = format!("ARG${}", self.instruction_counter);
+            let (dest_op, _dest_stype) = self.get_block_mem(&copy, 0);
+            let align = X64CodeGenerator::calculate_alignment(&arg.stype());
+            //let dest_op = Operand::Pseudo(temp_name.clone());
+            //  let src_op = Operand::PseudoMem(arg.as_variable().unwrap().0.clone());
+            self.moira(Instruction::Push(Operand::Register(Register::RCX)));
+            self.moira(Instruction::CopyBlock(src_op, dest_op.clone(), size));
+            self.moira(Instruction::Pop(Operand::Register(Register::RCX)));
+
+            self.moira(Instruction::Lea(dest_op, reg.clone()));
+            return Ok(());
+        } else {
+            let assembly_type = match size {
+                1 => AssemblyType::Byte,
+                2 => AssemblyType::Word,
+                4 => AssemblyType::LongWord,
+                8 => AssemblyType::QuadWord,
+                _ => unreachable!(),
+            };
+            let (src_op, _stype, src_assembly_type) = self.get_value(arg);
+            //let (dest_op, _dest_stype, dest_assembly_type) = self.get_value(&arg.clone());
+            //assert!(src_assembly_type == dest_assembly_type);
+            self.moira(Instruction::Mov(
+                AssemblyType::QuadWord,
+                src_op,
+                reg.clone(),
+            ));
+        };
+        Ok(())
+    }
     fn gen_instruction(&mut self, instruction: &crate::tacky::Instruction) -> Result<()> {
         println!("Tacky: {:?}", instruction);
         match instruction {
             tacky::Instruction::Return(value) => {
                 if let Some(value) = value {
-                    let (value, _stype, assembly_type) = self.get_value(value);
-                    let ret_reg = if assembly_type == AssemblyType::Double {
-                        Operand::Register(Register::XMM0)
+                    let (value, ret_type, assembly_type) = self.get_value(value);
+                    let size = Parser::get_total_object_size(&ret_type)?;
+                    if ret_type.is_struct() && !(size == 1 || size == 2 || size == 4 || size == 8) {
+                        let register = Operand::Register(Register::RAX);
+                        self.moira(Instruction::Pop(register.clone()));
+                        self.moira(Instruction::CopyBlock(value.clone(), register, size));
+                        // self.import_structure(&ret_type, name, op)?;
+                        // self.clone_struct(&retval, &register)?;
+                        // self.moira(Instruction::Lea(
+                        //     Operand::Pseudo(retval.as_variable().unwrap().0.clone()),
+                        //     register.clone(),
+                        // ));
                     } else {
-                        Operand::Register(Register::RAX)
-                    };
-                    self.moira(Instruction::Mov(assembly_type, value, ret_reg));
+                        let ret_reg = if assembly_type == AssemblyType::Double {
+                            Operand::Register(Register::XMM0)
+                        } else {
+                            Operand::Register(Register::RAX)
+                        };
+                        self.moira(Instruction::Mov(assembly_type, value, ret_reg));
+                    }
                 }
                 let instruction = Instruction::Ret;
                 self.moira(instruction);
@@ -318,58 +467,145 @@ impl X64BackEnd {
                     Register::XMM2,
                     Register::XMM3,
                 ];
-                let stack_delta = max(args.len(), 4) as i32 * 8;
 
-                for idx in 0..args.len() {
-                    if idx < int_reglist.len() {
-                        let arg = &args[idx];
-                        let (argval, _arg_stype, arg_assembly_type) = self.get_value(arg);
-                        let register = if arg_assembly_type == AssemblyType::Double {
-                            Operand::Register(float_reglist[idx].clone())
+                let shunt = if dest.is_some() {
+                    let retval = dest.clone().unwrap();
+                    if retval.is_struct() {
+                        let (argval, arg_stype, arg_assembly_type) = self.get_value(&retval);
+                        let size = Parser::get_total_object_size(&arg_stype)?;
+                        let register = Operand::Register(Register::RCX);
+
+                        if !(size == 1 || size == 2 || size == 4 || size == 8) {
+                            // self.clone_struct(&retval, &register)?;
+                            let align = X64CodeGenerator::calculate_alignment(&arg_stype);
+                            self.moira(Instruction::Lea(
+                                Operand::PseudoMem(
+                                    retval.as_variable().unwrap().0.clone(),
+                                    size,
+                                    0,
+                                    align,
+                                ),
+                                register.clone(),
+                            ));
+                            1
                         } else {
-                            Operand::Register(int_reglist[idx].clone())
-                        };
-                        self.moira(Instruction::Mov(arg_assembly_type, argval, register));
+                            0
+                        }
                     } else {
-                        let arg = &args[(args.len() - idx) + 3];
-                        let (argval, _arg_stype, arg_assembly_type) = self.get_value(arg);
-                        match argval {
-                            Operand::ImmediateI32(_)
-                            | Operand::ImmediateI64(_)
-                            | Operand::ImmediateU32(_)
-                            | Operand::ImmediateU64(_) => {
-                                self.moira(Instruction::Push(argval.clone()))
-                            }
-                            Operand::Pseudo(_) | Operand::Data(_, _) => {
-                                if arg_assembly_type == AssemblyType::Double
-                                    || arg_assembly_type == AssemblyType::QuadWord
-                                {
-                                    self.moira(Instruction::Push(argval.clone()))
-                                } else {
-                                    self.moira(Instruction::Mov(
-                                        arg_assembly_type,
-                                        argval,
-                                        Operand::Register(Register::RAX),
-                                    ));
-                                    self.moira(Instruction::Push(Operand::Register(Register::RAX)));
-                                }
-                            }
+                        0
+                    }
+                } else {
+                    0
+                };
+                let mut stack_delta = 32;
+                // for idx in int_reglist.len()..args.len() {
+                //     let arg = &args[idx];
+                //     if arg.is_struct() {
+                //         stack_delta += 8; //Parser::get_total_object_size(&arg.stype())?;
+                //     }
+                // }
+                // ensure stack stays 16 byte aligned
+                if args.len() > 4 && (args.len() - 4) % 2 == 1 {
+                    self.moira(Instruction::Push(Operand::Register(Register::RAX)));
+                    stack_delta += 8;
+                }
+                for idx in 0..args.len() {
+                    let reg_idx = idx + shunt;
+                    if reg_idx < int_reglist.len() {
+                        let arg = &args[idx];
 
-                            _ => panic!("Invalid Operand"),
+                        if arg.is_struct() {
+                            self.clone_struct(
+                                arg,
+                                &Operand::Register(int_reglist[reg_idx].clone()),
+                            )?;
+                            // stack_delta += delta;
+                        } else {
+                            let (argval, _arg_stype, arg_assembly_type) = self.get_value(arg);
+                            let register = if arg_assembly_type == AssemblyType::Double {
+                                Operand::Register(float_reglist[reg_idx].clone())
+                            } else {
+                                Operand::Register(int_reglist[reg_idx].clone())
+                            };
+                            self.moira(Instruction::Mov(arg_assembly_type, argval, register));
+                        }
+                    } else {
+                        let arg = &args[(args.len() - reg_idx) + 3];
+                        let (argval, _arg_stype, arg_assembly_type) = self.get_value(arg);
+                        if arg.is_struct() {
+                            let delta =
+                                self.clone_struct(arg, &Operand::Register(Register::R10))?;
+                            //stack_delta += delta;
+                            self.moira(Instruction::Push(Operand::Register(Register::R10)));
+                            stack_delta += 8; //Parser::get_total_object_size(&arg.stype())?;
+                                              // self.moira(Instruction::Mov(
+                                              //     AssemblyType::QuadWord,
+                                              //     Operand::Register(Register::R10),
+                                              //     Operand::Memory(
+                                              //         Register::RSP,
+                                              //         (32 + 8 * (idx - int_reglist.len())) as i32,
+                                              //     ),
+                                              // ));
+                        } else {
+                            stack_delta += 8;
+                            match argval {
+                                Operand::ImmediateI32(_)
+                                | Operand::ImmediateI64(_)
+                                | Operand::ImmediateU32(_)
+                                | Operand::ImmediateU64(_) => {
+                                    self.moira(Instruction::Push(argval.clone()))
+                                }
+
+                                Operand::Pseudo(_) | Operand::Data(_, _) => {
+                                    if arg_assembly_type == AssemblyType::Double
+                                        || arg_assembly_type == AssemblyType::QuadWord
+                                    {
+                                        self.moira(Instruction::Push(argval.clone()))
+                                    } else {
+                                        self.moira(Instruction::Mov(
+                                            arg_assembly_type,
+                                            argval,
+                                            Operand::Register(Register::RAX),
+                                        ));
+                                        self.moira(Instruction::Push(Operand::Register(
+                                            Register::RAX,
+                                        )));
+                                    }
+                                }
+
+                                _ => panic!("Invalid Operand"),
+                            }
                         }
                     }
                 }
                 self.moira(Instruction::AllocateStack(32));
                 self.moira(Instruction::Call(name.clone()));
-                self.moira(Instruction::DeallocateStack(stack_delta));
+                self.moira(Instruction::DeallocateStack(stack_delta as i32));
                 if let Some(dest) = dest {
-                    let (dest, _stype, ret_assembly_type) = self.get_value(dest);
-                    let ret_reg = if ret_assembly_type == AssemblyType::Double {
-                        Operand::Register(Register::XMM0)
+                    let (dest_op, stype, ret_assembly_type) = self.get_value(dest);
+                    if dest.is_struct() {
+                        //   let (argval, arg_stype, arg_assembly_type) = self.get_value(&retval);
+                        let size = Parser::get_total_object_size(&stype)?;
+                        // let register = Operand::Register(Register::RCX);
+
+                        if !(size == 1 || size == 2 || size == 4 || size == 8) {
+                            // self.clone_struct(&retval, &register)?;
+                            // 1
+                        } else {
+                            self.moira(Instruction::Mov(
+                                ret_assembly_type.clone(),
+                                Operand::Register(Register::RAX),
+                                dest_op.clone(),
+                            ));
+                        }
                     } else {
-                        Operand::Register(Register::RAX)
-                    };
-                    self.moira(Instruction::Mov(ret_assembly_type, ret_reg, dest));
+                        let ret_reg = if ret_assembly_type == AssemblyType::Double {
+                            Operand::Register(Register::XMM0)
+                        } else {
+                            Operand::Register(Register::RAX)
+                        };
+                        self.moira(Instruction::Mov(ret_assembly_type, ret_reg, dest_op));
+                    }
                 }
             }
 
@@ -581,7 +817,7 @@ impl X64BackEnd {
                     ));
 
                     self.moira(Instruction::CopyBlock(
-                        Operand::Memory(Register::RAX, 0),
+                        Operand::Register(Register::RAX),
                         dest_op,
                         Parser::get_total_object_size(&dest.stype()).unwrap(),
                     ));
@@ -613,7 +849,7 @@ impl X64BackEnd {
 
                     self.moira(Instruction::CopyBlock(
                         dest_op,
-                        Operand::Memory(Register::RAX, 0),
+                        Operand::Register(Register::RAX),
                         Parser::get_total_object_size(&src.stype()).unwrap(),
                     ));
                 } else {
@@ -713,13 +949,17 @@ impl X64BackEnd {
                 }
             }
             tacky::Instruction::CopyFromOffset(src, offset, dest) => {
-                let (src, _src_stype) = self.get_block_mem(src, *offset);
-                let (dest, dest_stype, dest_at) = self.get_value(dest);
+                let (src_op, _src_stype) = self.get_block_mem(src, *offset);
+                let (dest_op, dest_stype, dest_at) = self.get_value(dest);
                 if dest_stype.is_scalar() {
                     //  assert!(src_assembly_type == dest_at);
-                    self.moira(Instruction::Mov(dest_at, src, dest));
+                    self.moira(Instruction::Mov(dest_at, src_op, dest_op));
                 } else {
-                    unreachable!();
+                    self.moira(Instruction::CopyBlock(
+                        src_op,
+                        dest_op,
+                        Parser::get_total_object_size(&dest_stype).unwrap(),
+                    ));
                 }
             }
         }

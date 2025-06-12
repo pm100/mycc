@@ -19,12 +19,13 @@ pub enum Instruction {
     Label(String),
     Call(String),
     Push(Operand),
+    Pop(Operand),
     DeallocateStack(i32),
     AllocateStack(i32),
     Cvttsdsi(AssemblyType, Operand, Operand),
     Cvtsi2sd(AssemblyType, Operand, Operand),
     Lea(Operand, Operand),
-    CopyBlock(Operand, Operand, usize),
+    CopyBlock(Operand, Operand, usize), // src, dst, size, ops are variables (false) or pointers (true)
 }
 #[derive(Debug, Clone)]
 pub enum UnaryOperator {
@@ -84,6 +85,7 @@ pub enum Register {
     R11,
     //CL,
     RBP,
+    RSP,
     XMM0,
     XMM1,
     XMM2,
