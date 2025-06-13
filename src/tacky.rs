@@ -1,12 +1,8 @@
-use std::{
-    cell::RefCell,
-    collections::{BTreeMap, HashMap},
-    rc::Rc,
-};
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use enum_as_inner::EnumAsInner;
 
-use crate::{parser::Parser, symbols::SymbolType, x64::moira_inst::AssemblyType};
+use crate::{parser::Parser, symbols::SymbolType};
 
 pub struct TackyProgram {
     pub functions: Vec<Function>,
@@ -107,7 +103,7 @@ impl PendingResult {
         match self {
             PendingResult::PlainValue(v) => matches!(v, Value::String(_)),
             PendingResult::Dereference(v) => matches!(v, Value::String(_)),
-            PendingResult::SubObject(_, v, _) => unreachable!(),
+            PendingResult::SubObject(_, _, _) => unreachable!(),
         }
     }
     pub fn get_type(&self) -> SymbolType {
@@ -278,42 +274,34 @@ impl TackyProgram {
         });
         self.current_function = self.functions.len() - 1;
     }
-    fn get_assembly_type(value: &Value) -> AssemblyType {
-        match value {
-            Value::Int32(_) => AssemblyType::LongWord,
-            Value::Int64(_) => AssemblyType::QuadWord,
-            Value::UInt32(_) => AssemblyType::LongWord,
-            Value::UInt64(_) => AssemblyType::QuadWord,
-            Value::Double(_) => AssemblyType::QuadWord,
-            Value::Char(_) => AssemblyType::Byte,
-            Value::UChar(_) => AssemblyType::Byte,
-            Value::String(_) => todo!(),
-            Value::Variable(_, stype) => match stype {
-                SymbolType::Int32 | SymbolType::UInt32 => AssemblyType::LongWord,
-                SymbolType::Int64 | SymbolType::UInt64 => AssemblyType::QuadWord,
-                SymbolType::Double => AssemblyType::QuadWord,
-                SymbolType::Char => AssemblyType::Byte,
-                SymbolType::SChar => AssemblyType::Byte,
-                SymbolType::UChar => AssemblyType::Byte,
-                SymbolType::Function(_, _) => AssemblyType::QuadWord, // TODO
-                SymbolType::Pointer(_) => AssemblyType::QuadWord,
-                SymbolType::Array(_, _) => todo!(), // TODO
-                SymbolType::Void => unreachable!("Void type should not be used in assembly"),
-                SymbolType::Struct(_) => todo!(), // TODO
-            },
-            Value::Void => unreachable!("Void type should not be used in assembly"),
-            //   SymbolType::Void => unreachable!("Void type should not be used in assembly"),
-        }
-    }
+    // fn get_assembly_type(value: &Value) -> AssemblyType {
+    //     match value {
+    //         Value::Int32(_) => AssemblyType::LongWord,
+    //         Value::Int64(_) => AssemblyType::QuadWord,
+    //         Value::UInt32(_) => AssemblyType::LongWord,
+    //         Value::UInt64(_) => AssemblyType::QuadWord,
+    //         Value::Double(_) => AssemblyType::QuadWord,
+    //         Value::Char(_) => AssemblyType::Byte,
+    //         Value::UChar(_) => AssemblyType::Byte,
+    //         Value::String(_) => todo!(),
+    //         Value::Variable(_, stype) => match stype {
+    //             SymbolType::Int32 | SymbolType::UInt32 => AssemblyType::LongWord,
+    //             SymbolType::Int64 | SymbolType::UInt64 => AssemblyType::QuadWord,
+    //             SymbolType::Double => AssemblyType::QuadWord,
+    //             SymbolType::Char => AssemblyType::Byte,
+    //             SymbolType::SChar => AssemblyType::Byte,
+    //             SymbolType::UChar => AssemblyType::Byte,
+    //             SymbolType::Function(_, _) => AssemblyType::QuadWord, // TODO
+    //             SymbolType::Pointer(_) => AssemblyType::QuadWord,
+    //             SymbolType::Array(_, _) => todo!(), // TODO
+    //             SymbolType::Void => unreachable!("Void type should not be used in assembly"),
+    //             SymbolType::Struct(_) => todo!(), // TODO
+    //         },
+    //         Value::Void => unreachable!("Void type should not be used in assembly"),
+    //         //   SymbolType::Void => unreachable!("Void type should not be used in assembly"),
+    //     }
+    // }
     pub(crate) fn add_instruction(&mut self, instruction: Instruction) {
-        // if let Instruction::Copy(v1, v2) = &instruction {
-        //     assert!(
-        //         Self::get_assembly_type(v1) == Self::get_assembly_type(v2),
-        //         "Copy instruction types do not match: {:?} {:?}",
-        //         v1,
-        //         v2
-        //     );
-        // }
         self.functions[self.current_function]
             .instructions
             .push(instruction);
@@ -342,18 +330,6 @@ impl TackyProgram {
             );
         }
 
-        // for structure in self.structs.values() {
-        //     println!(
-        //         "Structure: {} Unique Name: {} Size: {} Alignment: {}",
-        //         structure.name, structure.unique_name, structure.size, structure.alignment
-        //     );
-        //     for (name, member) in &structure.members {
-        //         println!(
-        //             "  Member: {} Offset: {} Type: {:?}",
-        //             name, member.offset, member.stype
-        //         );
-        //     }
-        // }
         for function in &self.functions {
             println!(
                 "Function: {:?} {}({:?}) global:{}",

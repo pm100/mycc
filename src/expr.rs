@@ -1,5 +1,3 @@
-use std::future::Pending;
-
 use crate::{
     expect,
     lexer::Token,
@@ -11,7 +9,7 @@ use crate::{
 };
 use anyhow::{bail, Result};
 //use backtrace::Symbol;
-//use backtrace::Symbol;
+
 pub enum VoidCastMode {
     None,
     From,
@@ -72,7 +70,6 @@ impl Parser {
         Ok(ret)
     }
     fn do_expression(&mut self, min_prec: i32) -> Result<PendingResult> {
-        //let mut left = self.do_unary()?;
         let mut left = self.parse_cast()?;
 
         loop {
@@ -103,13 +100,6 @@ impl Parser {
                     match token {
                         // simple assignment
                         Token::Assign => {
-                            // let right_type = right.get_type();
-                            // if right_type.is_pointer()
-                            //     && right_type.get_inner_type()?.is_struct()
-                            //     && right_type == left.get_type()
-                            // {
-
-                            // }
                             let result = self.store_into_lvalue(&right_rv, &left)?;
 
                             // ensure we do not return an lvalue
@@ -493,38 +483,13 @@ impl Parser {
                 return self.array_to_pointer(value);
             }
             if target_type.is_void_pointer() && vtype.is_pointer() {
-                // let ret = self.make_temporary(target_type);
-                // if vtype.is_array() {
-                //     // array to pointer decay
-                //     let ptr = self.array_to_pointer(value)?;
-                //     self.instruction(Instruction::Copy(ptr.clone(), ret.clone()));
-                // } else {
-                //     if !vtype.is_pointer() {
-                //         bail!("Expected pointer, got {:?}", vtype);
-                //     }
-                //     self.instruction(Instruction::Copy(value.clone(), ret.clone()));
-                // }
                 return self.convert_to(value, target_type, true);
-                //return Ok(ret);
             }
             if vtype.is_void_pointer() {
                 return self.convert_to(value, target_type, true);
             }
         }
 
-        // if target_type.is_pointer()
-        //     && vtype.is_array()
-        //     && Self::get_inner_type(target_type)? == Self::get_inner_type(&vtype)?
-        // {
-        //     // array to pointer decay
-        //     return self.array_to_pointer(value);
-        // }
-        // //       if target_type.is_pointer() &&
-        // if target_type.is_pointer() && target_type.get_inner_type().unwrap().is_void() {
-        //     let ret = self.make_temporary(target_type);
-        //     self.instruction(Instruction::Copy(value.clone(), ret.clone()));
-        //     return Ok(ret);
-        // }
         bail!("Cannot convert {:?} to {:?}", value, target_type);
     }
 
@@ -561,9 +526,7 @@ impl Parser {
             SymbolType::Char => 1,
             SymbolType::UChar => 1,
             SymbolType::SChar => 1,
-            SymbolType::Array(t, _) => todo!(), //Self::get_total_object_size(t).unwrap(),
-            SymbolType::Void => unreachable!(),
-            SymbolType::Struct(_) => unreachable!(),
+            _ => unreachable!(),
         }
     }
     pub fn get_common_pointer_type(a: &Value, b: &Value) -> Result<SymbolType> {
@@ -888,16 +851,10 @@ impl Parser {
                 }
             }
             PendingResult::SubObject(var, stype, offset) => {
-                //let stype = var.stype();
                 if !self.is_lvalue(var) || stype.is_array() {
                     bail!("Not lvalue2 {:?}", dest);
                 }
-                let converted = self.convert_by_assignment(value, &stype)?;
-                // if stype.is_struct() {
-                //     // we need to copy the whole struct
-                //     self.instruction(Instruction::Copy(converted.clone(), var.clone()));
-                //     return Ok(converted);
-                // }
+                let converted = self.convert_by_assignment(value, stype)?;
                 self.instruction(Instruction::CopyToOffset(
                     converted.clone(),
                     var.clone(),
@@ -919,27 +876,6 @@ impl Parser {
         if let SymbolType::Array(stype, _size) = vtype {
             let dest = self.make_temporary(&SymbolType::Pointer(Box::new(*stype)));
             self.instruction(Instruction::GetAddress(value.clone(), dest.clone()));
-            Ok(dest)
-        } else {
-            Ok(value.clone())
-        }
-    }
-    fn sub_array_to_pointer(&mut self, subobject: &PendingResult) -> Result<Value> {
-        // assert!(subobject.is_struct());
-        println!("sub_array_to_pointer {:?}", subobject);
-        let (value, ref sub_type, offset) = match subobject {
-            PendingResult::SubObject(var, stype, offset) => (var.clone(), stype.clone(), *offset),
-            _ => bail!("Expected subobject, got {:?}", subobject),
-        };
-        if let SymbolType::Array(stype, _size) = sub_type {
-            let dest = self.make_temporary(&SymbolType::Pointer(stype.clone()));
-            self.instruction(Instruction::GetAddress(value.clone(), dest.clone()));
-            self.instruction(Instruction::AddPtr(
-                dest.clone(),
-                Value::Int64(offset as i64),
-                1,
-                dest.clone(),
-            ));
             Ok(dest)
         } else {
             Ok(value.clone())
@@ -989,17 +925,10 @@ impl Parser {
             //  _ => todo!(),
             PendingResult::SubObject(var, stype, offset) => {
                 if sizeof {
-                    let fake = self.make_temporary(&stype);
+                    let fake = self.make_temporary(stype);
                     return Ok(fake);
                 }
-                //    let var = self.sub_array_to_pointer(&var.clone(), stype)?;
-                //                println!("sub_array_to_pointer {:?}", subobject);
-                // let (value, ref sub_type, offset) = match subobject {
-                //     PendingResult::SubObject(var, stype, offset) => {
-                //         (var.clone(), stype.clone(), *offset)
-                //     }
-                //     _ => bail!("Expected subobject, got {:?}", subobject),
-                // };
+
                 if let SymbolType::Array(stype, _size) = stype {
                     let dest = self.make_temporary(&SymbolType::Pointer(stype.clone()));
                     self.instruction(Instruction::GetAddress(var.clone(), dest.clone()));
@@ -1423,11 +1352,8 @@ impl Parser {
                 if let Value::Variable(_name, stype) = v {
                     let sym = match stype {
                         SymbolType::Pointer(sym) => *sym,
-                        // SymbolType::Struct(sdef) => SymbolType::Struct(sdef),
                         _ => bail!("Expected pointer, got {:?}", stype),
                     };
-                    //  if let SymbolType::Pointer(sym) = stype {
-                    //let p = v.get_inner_type()?;
                     if !sym.is_struct() {
                         bail!("Expected struct, got {:?}", sym);
                     }
@@ -1444,7 +1370,7 @@ impl Parser {
                     //  }
                 }
             }
-            PendingResult::SubObject(v, stype, offset) => {
+            PendingResult::SubObject(_v, stype, _offset) => {
                 if let SymbolType::Struct(sdef) = stype {
                     if let Some(fdef) = sdef.borrow().members.iter().find(|m| m.name == field_name)
                     {
@@ -1470,27 +1396,7 @@ impl Parser {
         //     if let Some(fdef) = sdef.borrow().members.get(&field) {
         let ret = match primary {
             PendingResult::PlainValue(v) => {
-                // let ftype = if fdef.stype.is_array() {
-                //     SymbolType::Pointer(Box::new(fdef.stype.get_inner_type()?))
-                // } else {
-                //     fdef.stype.clone()
-                // };
-                // if fdef.stype.is_array() {
-                //     let dest = self.make_temporary(&SymbolType::Pointer(Box::new(
-                //         fdef.stype.get_inner_type()?,
-                //     )));
-                //     self.instruction(Instruction::GetAddress(v.clone(), dest.clone()));
-                //     let fin = self.make_temporary(&dest.stype());
-                //     self.instruction(Instruction::AddPtr(
-                //         dest,
-                //         Value::Int64(fdef.offset as i64),
-                //         1,
-                //         fin.clone(),
-                //     ));
-                //     PendingResult::PlainValue(fin)
-                // } else {
                 PendingResult::SubObject(v.clone(), fdef.stype, fdef.offset)
-                //}
             }
 
             PendingResult::Dereference(v) => {
@@ -1503,7 +1409,7 @@ impl Parser {
                 ));
                 PendingResult::Dereference(dest)
             }
-            PendingResult::SubObject(v, stype, offset) => {
+            PendingResult::SubObject(v, _stype, offset) => {
                 if fdef.stype.is_array() {
                     let dest = self.make_temporary(&SymbolType::Pointer(Box::new(
                         fdef.stype.get_inner_type()?,
@@ -1542,81 +1448,8 @@ impl Parser {
                 Token::Dot => {
                     println!("dot primary {:?}", primary);
                     self.next_token()?;
-                    // if matches!(primary.get_type(), SymbolType::Struct(_))
-                    //     && Self::get_total_object_size(&primary.get_type())? > 8
-                    // {
-                    //     let rv = self.make_rvalue(&primary)?;
-                    //     primary = self.handle_dot(&PendingResult::Dereference(rv))?;
-                    // } else {
                     primary = self.handle_dot(&primary)?;
-                    //     }
-                    // let field = expect!(self, Token::Identifier);
-                    // println!("dot {:?}", field);
-                    // //let stype = primary.get_type();
-                    // let fdef = Self::get_struct_member(primary.clone(), &field)?;
-                    // println!("fdef {:?}", fdef);
-                    // // if let SymbolType::Struct(sdef) = stype.clone() {
-                    // //     if let Some(fdef) = sdef.borrow().members.get(&field) {
-                    // match primary {
-                    //     PendingResult::PlainValue(v) => {
-                    //         // let ftype = if fdef.stype.is_array() {
-                    //         //     SymbolType::Pointer(Box::new(fdef.stype.get_inner_type()?))
-                    //         // } else {
-                    //         //     fdef.stype.clone()
-                    //         // };
-                    //         if fdef.stype.is_array() {
-                    //             let dest = self.make_temporary(&SymbolType::Pointer(Box::new(
-                    //                 fdef.stype.get_inner_type()?,
-                    //             )));
-                    //             self.instruction(Instruction::GetAddress(v.clone(), dest.clone()));
-                    //             let fin = self.make_temporary(&dest.stype());
-                    //             self.instruction(Instruction::AddPtr(
-                    //                 dest,
-                    //                 Value::Int64(fdef.offset as i64),
-                    //                 1,
-                    //                 fin.clone(),
-                    //             ));
-                    //             primary = PendingResult::PlainValue(fin);
-                    //         } else {
-                    //             primary = PendingResult::SubObject(v, fdef.stype, fdef.offset);
-                    //         }
-                    //     }
-
-                    //     PendingResult::Dereference(v) => {
-                    //         let dest = self
-                    //             .make_temporary(&SymbolType::Pointer(Box::new(fdef.stype.clone())));
-                    //         self.instruction(Instruction::AddPtr(
-                    //             v,
-                    //             Value::Int64(fdef.offset as i64),
-                    //             1,
-                    //             dest.clone(),
-                    //         ));
-                    //         primary = PendingResult::Dereference(dest);
-                    //     }
-                    //     PendingResult::SubObject(v, stype, offset) => {
-                    //         if fdef.stype.is_array() {
-                    //             let dest = self.make_temporary(&SymbolType::Pointer(Box::new(
-                    //                 fdef.stype.get_inner_type()?,
-                    //             )));
-                    //             self.instruction(Instruction::GetAddress(v.clone(), dest.clone()));
-                    //             let fin = self.make_temporary(&dest.stype());
-                    //             self.instruction(Instruction::AddPtr(
-                    //                 dest,
-                    //                 Value::Int64(offset as i64 + fdef.offset as i64),
-                    //                 1,
-                    //                 fin.clone(),
-                    //             ));
-                    //             primary = PendingResult::PlainValue(fin);
-                    //         } else {
-                    //             primary =
-                    //                 PendingResult::SubObject(v, fdef.stype, offset + fdef.offset);
-                    //         }
-                    //     }
-                    // }
                     println!("dot {:?}", primary);
-                    // } else {
-                    //     bail!("Expected struct, got {:?}", stype);
-                    // }
                 }
                 Token::Arrow => {
                     self.next_token()?;
@@ -1626,31 +1459,6 @@ impl Parser {
                     let primary_rv = self.make_rvalue(&primary)?;
 
                     primary = self.handle_dot(&PendingResult::Dereference(primary_rv))?;
-                    //self.handle_dot(&primary)?;
-                    // let field = expect!(self, Token::Identifier);
-                    // println!("{:?} -> {}", primary, field);
-                    // let stype = primary.get_type();
-                    // if let SymbolType::Pointer(sym) = stype.clone() {
-                    //     if !sym.is_struct() {
-                    //         bail!("Expected structx, got {:?}", sym);
-                    //     }
-                    //     let sdef = sym.as_struct().unwrap();
-                    //     if let Some(fdef) = sdef.borrow().members.iter().find(|m| m.name == field) {
-                    //         println!("arrow {:?}", primary);
-                    //         let dest = self
-                    //             .make_temporary(&SymbolType::Pointer(Box::new(fdef.stype.clone())));
-                    //         let prv = self.make_rvalue(&primary)?;
-                    //         self.instruction(Instruction::AddPtr(
-                    //             prv,
-                    //             Value::Int64(fdef.offset as i64),
-                    //             1,
-                    //             dest.clone(),
-                    //         ));
-                    //         primary = PendingResult::Dereference(dest);
-                    //     } else {
-                    //         bail!("Field {} not found in struct {}", field, sdef.borrow().name);
-                    //     }
-                    // };
                 }
                 _ => {
                     break;

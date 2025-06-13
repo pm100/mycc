@@ -1,4 +1,4 @@
-use std::{cell::RefCell, collections::HashMap, fmt, rc::Rc};
+use std::{collections::HashMap, fmt};
 
 use anyhow::{bail, Result};
 use enum_as_inner::EnumAsInner;
@@ -67,22 +67,7 @@ pub struct Extern {
     pub value: Vec<StaticInit>,
     pub stype: SymbolType,
 }
-// #[derive(Debug, Clone, PartialEq)]
-// pub struct Structure {
-//     pub name: String,
-//     pub unique_name: String,
-//     pub members: HashMap<String, StructMember>,
 
-//     pub size: usize,
-//     pub alignment: usize,
-// }
-// //type StructurePtr = Rc<RefCell<Structure>>;
-// #[derive(Debug, Clone, PartialEq)]
-// pub struct StructMember {
-//     pub name: String,
-//     pub stype: SymbolType,
-//     pub offset: usize,
-// }
 impl PartialEq for SymbolType {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
@@ -127,14 +112,7 @@ impl fmt::Debug for SymbolType {
             SymbolType::Array(t, sz) => write!(f, "[{:?}; {}]", t, sz),
             SymbolType::Struct(s) => {
                 write!(f, "struct {} ({})", s.borrow().unique_name, s.borrow().name)
-            } // SymbolType::Struct(s, true) => {
-              //     write!(
-              //         f,
-              //         "struct_arg {} ({})",
-              //         s.borrow().unique_name,
-              //         s.borrow().name
-              //     )
-              // }
+            }
         }
     }
 }
@@ -177,7 +155,7 @@ impl Parser {
             SymbolType::Pointer(t) => Ok(*t.clone()),
             SymbolType::Array(t, _) => Ok(*t.clone()),
             SymbolType::Function(_, t) => Ok(*t.clone()),
-            // SymbolType::StructArg(sdef) => Ok(sdef.clone()),
+
             _ => bail!("Not a pointer or array type"),
         }
     }
@@ -220,8 +198,8 @@ impl Parser {
                 size
             } // SymbolType::StructArg(_) => stype.as_struct_arg().unwrap().borrow().size,
             _ => {
-                let size = Self::get_size_of_stype(stype);
-                size
+                
+                Self::get_size_of_stype(stype)
             }
         };
         Ok(size)

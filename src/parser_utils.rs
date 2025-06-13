@@ -1,7 +1,6 @@
 use std::mem::discriminant;
 
 use anyhow::{bail, Result};
-use backtrace::Symbol;
 
 use crate::{lexer::Token, parser::Parser, symbols::SymbolType, tacky::Value};
 
@@ -25,7 +24,7 @@ impl Parser {
             SymbolType::UChar => 1,
             SymbolType::SChar => 1,
             SymbolType::Void => 0,
-            SymbolType::Array(stype, _) => self.get_alignment(&*stype),
+            SymbolType::Array(stype, _) => self.get_alignment(stype),
             SymbolType::Struct(s) => s.borrow().alignment,
             SymbolType::Pointer(_) => 8,
             _ => panic!("Unknown type"),

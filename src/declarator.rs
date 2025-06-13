@@ -1,9 +1,4 @@
-use std::{
-    cell::RefCell,
-    cmp::max,
-    collections::{BTreeMap, HashMap},
-    rc::Rc,
-};
+use std::{cell::RefCell, rc::Rc};
 
 use crate::{
     expect,
@@ -20,7 +15,6 @@ struct Parameter {
     pub decl: Declarator,
 }
 pub fn indent(str: &str) {
-    //let msg = format!("{:>width$}", str, width=INDENT as usize);
     let pad = unsafe { format!("{empty:>width$}", empty = "", width = INDENT * 4) };
     println!("{}{}", pad, str);
 }
@@ -221,9 +215,7 @@ impl Parser {
                 if simp.is_function() {
                     bail!("Function type cannot be a function type");
                 }
-                // let names = params.iter().map(|p| p.name.clone()).collect::<Vec<_>>();
-                // let stypes = params.iter().map(|p| p.stype.clone()).collect::<Vec<_>>();
-                // let stype = SymbolType::Function(stypes, Box::new(new_type));
+
                 Declarator::Function(params, Box::new(simp))
             }
             Suffix::Index(indexes) => {
@@ -259,7 +251,7 @@ impl Parser {
             Token::LeftParen => {
                 self.next_token()?;
                 let params = self.parse_param_list()?;
-                //self.expect(Token::RightParen)?;
+
                 Suffix::ParamList(params)
             }
             Token::LeftBracket => {
@@ -307,10 +299,6 @@ impl Parser {
             self.expect(Token::Comma)?;
             // parse one param
             let param = self.parse_one_param()?;
-
-            // if parameters.iter().any(|p| p.name == param.name) {
-            //     bail!("Duplicate parameter name: {}", param.name);
-            // }
             parameters.push(param);
             if self.peek()? == Token::RightParen {
                 self.next_token()?;
@@ -357,12 +345,9 @@ impl Parser {
                     }
                     structure = true;
                     let name = expect!(self, Token::Identifier);
-                    let is_pointer = self.peek()? == Token::Multiply;
+
                     if let Some((_, unique_name)) = self.lookup_struct(&name) {
                         let sdef = self.tacky.structs.get(&unique_name).unwrap();
-                        // if sdef.borrow().size == 0 && !is_pointer && !specifiers.is_external {
-                        //     bail!("Struct {} is incomplete", name);
-                        // }
                         specifiers.specified_type = Some(SymbolType::Struct(sdef.clone()));
                     } else {
                         self.dump_struct_map();
@@ -573,36 +558,7 @@ impl Parser {
         };
         let new_name = sptr.borrow().unique_name.clone();
         self.tacky.structs.insert(new_name.clone(), sptr.clone());
-        //let new_name = format!("{}${}", name, self.tacky.structs.len());
 
-        // println!("struct name {:?} {}", name, new_name);
-        // if let Some(s) = self.lookup_struct(&name) {
-        //     let sdef = self.tacky.structs.get(&s.1).unwrap();
-        //     if sdef.borrow().size > 0 {
-        //         // already defined, but not empty
-        //         if self.peek()? == Token::LeftBrace {
-        //             bail!("Struct {} already defined", name);
-        //         }
-        //     }
-        //     self.tacky.structs.insert(s.1.clone(), sdef.clone());
-        //     sdef
-        //     // if s.0 {
-        //     //     bail!("Struct {} already defined", name);
-        //     // }
-        //     //res = s.1.clone();
-        // } else {
-        //     let sptr = Rc::new(RefCell::new(structure.clone()));
-        //     self.tacky.structs.insert(new_name.clone(), sptr.clone());
-        // }
-        // let structure = Structure {
-        //     name: name.to_string(),
-        //     members: Vec::new(),
-        //     unique_name: new_name.clone(),
-        //     size: 0,
-        //     alignment: 0,
-        // };
-        //  let mut structure = sptr.borrow_mut();
-        // self.expect(Token::LeftBrace)?;
         if self.peek()? == Token::LeftBrace {
             self.struct_lookup
                 .last_mut()
@@ -610,12 +566,7 @@ impl Parser {
                 .insert(name.to_string(), (true, new_name.clone()));
             // }
             self.dump_struct_map();
-            // self.struct_lookup
-            //     .last_mut()
-            //     .unwrap()
-            //     .get_mut(&name)
-            //     .unwrap()
-            //     .0 = true;
+
             self.next_token()?;
             let mut offset = 0;
             let mut largest = SymbolType::Char;
@@ -636,13 +587,13 @@ impl Parser {
                         bail!("Duplicate member name: {}", member_name);
                     }
                 }
-                // println!("declaration {:?}", res);
+
                 offset += self.pad(&member_type, offset);
 
                 let member = StructMember {
                     name: member_name.clone(),
                     stype: member_type.clone(),
-                    offset: offset,
+                    offset,
                 };
                 let align = self.get_alignment(&member_type);
                 let size = Self::get_total_object_size(&member_type)?;
@@ -667,9 +618,7 @@ impl Parser {
                 .insert(name.to_string(), (true, new_name.clone()));
         }
         println!("struct {:?}", sptr.borrow());
-        // self.tacky
-        //     .structs
-        //     .insert(new_name.clone(), Rc::new(RefCell::new(structure)));
+
         self.expect(Token::SemiColon)?;
 
         Ok(())

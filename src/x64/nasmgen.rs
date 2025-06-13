@@ -5,7 +5,6 @@ use crate::x64::moira::{Function, MoiraProgram};
 //use crate::codegen::MoiraCompiler;
 use crate::tacky::StaticInit;
 use anyhow::Result;
-use backtrace::Symbol;
 use std::collections::HashMap;
 use std::io::Write;
 use std::{io::BufWriter, path::Path};
@@ -94,21 +93,7 @@ impl X64CodeGenerator {
         let hex = value.to_bits();
         format!("{:x}", hex)
     }
-    fn calculate_static_alignment(init: &StaticInit) -> usize {
-        match init {
-            StaticInit::InitChar(_) => 1,
-            StaticInit::InitUChar(_) => 1,
-            StaticInit::InitI32(_) => 4,
-            StaticInit::InitU32(_) => 4,
-            StaticInit::InitI64(_) => 8,
-            StaticInit::InitU64(_) => 8,
-            StaticInit::InitDouble(_) => 8,
-            StaticInit::PointerInit(_) => 8,
-            StaticInit::InitNone(count) => 1,
-            StaticInit::InitString(_, _) => 1,
-            _ => unreachable!(),
-        }
-    }
+
     pub fn calculate_alignment(stype: &SymbolType) -> usize {
         println!("Calculating alignment for {:?}", stype);
         match stype {
@@ -174,65 +159,11 @@ impl X64CodeGenerator {
 
             writeln!(writer, "${}: ", var.name)?;
             if empty {
-                // match var.stype {
-                //     SymbolType::Int32 | SymbolType::UInt32 => writeln!(writer, " dd {}", 0)?,
-                //     SymbolType::Int64 | SymbolType::UInt64 | SymbolType::Pointer(_) => {
-                //         writeln!(writer, " dq {}", 0)?
-                //     }
-                //     SymbolType::Char | SymbolType::UChar | SymbolType::SChar => {
-                //         writeln!(writer, " db {}", 0)?
-                //     }
-                //     SymbolType::Double => {
-                //         writeln!(writer, " dq {}", 0)?;
-                //         writeln!(writer, " dq {}", 0)?
-                //     }
-                //     SymbolType::Array(_, _) => {
                 let size = Parser::get_total_object_size(&var.stype)?;
-                //let (size, etype) = Parser::get_array_count_and_type(&var.stype)?;
-                // for _i in 0..size {
-                //     match etype {
-                //         SymbolType::Int32 | SymbolType::UInt32 => {
-                //             writeln!(writer, " dd {}", 0)?
-                //         }
-                //         SymbolType::Int64 | SymbolType::UInt64 | SymbolType::Pointer(_) => {
-                //             writeln!(writer, " dq {}", 0)?
-                //         }
-                //         SymbolType::Double => {
-                //             writeln!(writer, " dq {}", 0)?;
-                //             writeln!(writer, " dq {}", 0)?
-                //         }
-                //         SymbolType::Char | SymbolType::UChar | SymbolType::SChar => {
-                //             writeln!(writer, " db {}", 0)?
-                //         }
-                //         _ => unreachable!(),
-                //     }
-                // }
-                writeln!(writer, " resb {}", size)?;
-                //   }
-                //     _ => unreachable!(),
-                // }
-            } else {
-                // let mut offsets = match &var.stype {
-                //     SymbolType::Array(atype, size) => {
-                //         let mut res = Vec::new();
-                //         let sz = Parser::get_total_object_size(&atype).unwrap();
 
-                //         for _ in 0..*size {
-                //             res.push(sz);
-                //         }
-                //         res
-                //     }
-                //     SymbolType::Struct(sdef) => sdef
-                //         .borrow()
-                //         .members
-                //         .iter()
-                //         .map(|m| m.offset)
-                //         .collect::<Vec<usize>>(),
-                //     _ => unreachable!(),
-                // };
-                //                let mut offset = 0;
+                writeln!(writer, " resb {}", size)?;
+            } else {
                 for init in var.init.iter() {
-                    //                  let next_offset = offsets.pop().unwrap();
                     match init {
                         StaticInit::InitNone(count) => {
                             writeln!(writer, " resb {}", count)?;
@@ -257,7 +188,6 @@ impl X64CodeGenerator {
                         StaticInit::PointerInit(name) => {
                             writeln!(writer, " dq {}", name)?;
                         }
-                        _ => unreachable!(),
                     }
                 }
             }
@@ -618,7 +548,6 @@ impl X64CodeGenerator {
                     AssemblyType::Word => "WORD",
                     AssemblyType::Double => "",
                     AssemblyType::ByteArray(_, _) => "",
-                    _ => todo!(),
                 };
                 format!("{} [{}+{}]", qual, data, offset)
             }
@@ -629,8 +558,7 @@ impl X64CodeGenerator {
                     AssemblyType::Byte => "BYTE",
                     AssemblyType::Word => "WORD",
                     AssemblyType::Double => "",
-                    AssemblyType::ByteArray(_, __) => "",
-                    _ => todo!(),
+                    AssemblyType::ByteArray(_, _) => "",
                 };
                 format!("{} [{}]", qual, data)
             }
@@ -1341,7 +1269,7 @@ impl X64CodeGenerator {
                     let stack_offset = self.lookup_pseudo(pseudo_name, *total_size as i32, *align);
                     Operand::Memory(Register::RBP, -stack_offset + *offset as i32)
                 } else {
-                    Operand::Data(pseudo_name.clone(), *offset as usize)
+                    Operand::Data(pseudo_name.clone(), *offset)
                 }
             }
             _ => operand.clone(),
