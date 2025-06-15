@@ -1193,7 +1193,7 @@ impl X64BackEnd {
                         symbol_type.clone(),
                         assembly_type,
                     )
-                } else if symbol_type.is_array() {
+                } else if symbol_type.is_array() || symbol_type.is_struct_or_union() {
                     let align = X64CodeGenerator::calculate_alignment(symbol_type);
                     let total_size = Parser::get_total_object_size(symbol_type).unwrap();
                     (
@@ -1201,15 +1201,15 @@ impl X64BackEnd {
                         symbol_type.clone(),
                         assembly_type,
                     )
-                } else if symbol_type.is_struct_or_union() {
-                    let align = X64CodeGenerator::calculate_alignment(symbol_type);
-                    let total_size = Parser::get_total_object_size(symbol_type).unwrap();
+                // } else if symbol_type.is_struct_or_union() {
+                //     let align = X64CodeGenerator::calculate_alignment(symbol_type);
+                //     let total_size = Parser::get_total_object_size(symbol_type).unwrap();
 
-                    (
-                        Operand::PseudoMem(register.clone(), total_size, 0, align),
-                        symbol_type.clone(),
-                        assembly_type,
-                    )
+                //     (
+                //         Operand::PseudoMem(register.clone(), total_size, 0, align),
+                //         symbol_type.clone(),
+                //         assembly_type,
+                //     )
                 } else if symbol_type.is_scalar() {
                     (
                         Operand::Pseudo(register.clone()),

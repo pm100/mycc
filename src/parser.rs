@@ -972,7 +972,8 @@ impl Parser {
                         &field.stype,
                     )?);
                 }
-                for _ in field_idx..sdef.members.len() {
+                let fidx = field_idx;
+                for _ in fidx..sdef.members.len() {
                     // fill the rest with zeros
                     let field = sdef.members.get(field_idx).unwrap();
                     field_idx += 1;
@@ -1101,9 +1102,9 @@ impl Parser {
                 }
 
                 let field_init = ci.first().unwrap();
-                assert!(sdef.members.len() > 0);
+                assert!(sdef.members.is_empty());
                 let field = sdef.members.first().unwrap();
-                self.process_auto_initializer(value, 0 + offset, field_init, &field.stype)?;
+                self.process_auto_initializer(value, offset, field_init, &field.stype)?;
             }
             (Initializer::CompoundInit(ci), SymbolType::Struct(sdef)) => {
                 let mut field_idx = 0;
@@ -1116,7 +1117,8 @@ impl Parser {
                     let field_offset = offset + field.offset;
                     self.process_auto_initializer(value, field_offset, field_init, &field_type)?;
                 }
-                for _ in field_idx..sdef.members.len() {
+                let fidx = field_idx;
+                for _ in fidx..sdef.members.len() {
                     // fill the rest with zeros
                     let field = sdef.members.get(field_idx).unwrap();
                     field_idx += 1;

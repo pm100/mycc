@@ -348,7 +348,6 @@ impl Parser {
         };
         assert!(pointer.is_pointer());
         if pointer.is_void_pointer() {
-            // we can only add integers to void pointers
             bail!("Cannot add / subtract pointer");
         }
         let delta = if *op == BinaryOperator::Subtract {
@@ -1336,19 +1335,18 @@ impl Parser {
     fn get_struct_member(val: PendingResult, field_name: &str) -> Result<StructMember> {
         match val.clone() {
             PendingResult::PlainValue(v) => {
-                if let Value::Variable(_name, stype) = v {
-                    if let SymbolType::Struct(sdef) | SymbolType::Union(sdef) = stype {
-                        if let Some(fdef) =
-                            sdef.borrow().members.iter().find(|m| m.name == field_name)
-                        {
-                            return Ok(fdef.clone());
-                        }
-                        bail!(
-                            "Field {} not found in struct or union {}",
-                            field_name,
-                            sdef.borrow().name
-                        );
+                if let Value::Variable(_name, SymbolType::Struct(sdef) | SymbolType::Union(sdef)) =
+                    v
+                {
+                    if let Some(fdef) = sdef.borrow().members.iter().find(|m| m.name == field_name)
+                    {
+                        return Ok(fdef.clone());
                     }
+                    bail!(
+                        "Field {} not found in struct or union {}",
+                        field_name,
+                        sdef.borrow().name
+                    );
                 }
             }
             PendingResult::Dereference(v) => {
@@ -1392,12 +1390,9 @@ impl Parser {
     }
 
     fn handle_dot(&mut self, primary: &PendingResult) -> Result<PendingResult> {
-        //let stype = primary.get_type();
         let field = expect!(self, Token::Identifier);
         let fdef = Self::get_struct_member(primary.clone(), &field)?;
         println!("fdef xx{:?}", fdef);
-        // if let SymbolType::Struct(sdef) = stype.clone() {
-        //     if let Some(fdef) = sdef.borrow().members.get(&field) {
         let ret = match primary {
             PendingResult::PlainValue(v) => {
                 PendingResult::SubObject(v.clone(), fdef.stype, fdef.offset)
@@ -1501,7 +1496,6 @@ impl Parser {
             SymbolType::SChar => Value::Char(1),
             _ => bail!("Cannot use ++ or -- on {:?}", primary_rv),
         };
-        //   self.check_binary_allowed(&op, &Self::get_type(&primary_rv), &Self::get_type(&inc_val))?;
         // the value we will store into the lvalue
 
         let update = if primary_rv.is_pointer() {

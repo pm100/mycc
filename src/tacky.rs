@@ -132,10 +132,10 @@ impl Value {
     }
     pub fn is_void_pointer(&self) -> bool {
         if self.is_pointer() {
-            if let Value::Variable(_, stype) = self {
-                if let SymbolType::Pointer(inner) = stype {
-                    return matches!(**inner, SymbolType::Void);
-                }
+            if let Value::Variable(_, SymbolType::Pointer(inner)) = self {
+                //  if let SymbolType::Pointer(inner) = stype {
+                return matches!(**inner, SymbolType::Void);
+                //}
             }
         }
         false

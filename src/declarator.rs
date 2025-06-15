@@ -632,7 +632,7 @@ impl Parser {
                 structure.members.push(member);
             }
             let mut structure = sptr.borrow_mut();
-            if structure.members.len() == 0 {
+            if structure.members.is_empty() {
                 bail!("Empty struct");
             }
             if is_union {
