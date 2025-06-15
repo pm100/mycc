@@ -132,8 +132,8 @@ impl Parser {
         // this is a variable declartion, passed to do_variable_dec => true
         // this is a struct declaration => true
         // this is a statment => false
-
-        if self.peek()? == Token::Struct {
+        let token = self.peek()?;
+        if token == Token::Struct || token == Token::Union {
             //  self.next_token()?;
             if self.peek_n(1)?.is_identifier()
                 && (self.peek_n(2)? == Token::SemiColon || self.peek_n(2)? == Token::LeftBrace)
@@ -213,13 +213,13 @@ impl Parser {
                 bail!("Function {} must be a function type", name);
             }
             let (args_types, ret_type) = stype.as_function().unwrap();
-            if let SymbolType::Struct(sdef) = ret_type.as_ref() {
+            if let SymbolType::Struct(sdef) | SymbolType::Union(sdef) = ret_type.as_ref() {
                 if sdef.borrow().size == 0 {
                     bail!("Struct {} is incomplete", name);
                 }
             }
             for arg_type in args_types.iter() {
-                if let SymbolType::Struct(sdef) = arg_type {
+                if let SymbolType::Struct(sdef) | SymbolType::Union(sdef) = arg_type {
                     if sdef.borrow().size == 0 {
                         bail!("Struct {} is incomplete", name);
                     }
@@ -310,7 +310,7 @@ impl Parser {
                 SymbolType::Void => {
                     unreachable!()
                 }
-                SymbolType::Struct(_) => {
+                SymbolType::Struct(_) | SymbolType::Union(_) => {
                     bail!("Function {} already declared as struct", name);
                 }
             }
@@ -446,13 +446,13 @@ impl Parser {
             bail!("Variable type cannot be 'void'");
         }
 
-        if let SymbolType::Struct(sdef) = symbol_type {
+        if let SymbolType::Struct(sdef) | SymbolType::Union(sdef) = symbol_type {
             if sdef.borrow().size == 0 && !explicit_external {
                 bail!("Struct {} is incomplete", name);
             }
         }
         if let SymbolType::Array(atype, _) = symbol_type {
-            if let SymbolType::Struct(sdef) = atype.as_ref() {
+            if let SymbolType::Struct(sdef) | SymbolType::Union(sdef) = atype.as_ref() {
                 if sdef.borrow().size == 0 && !explicit_external {
                     bail!("Struct {} is incomplete", name);
                 }
@@ -802,10 +802,14 @@ impl Parser {
                 }
                 Ok(Initializer::CompoundInit(inits))
             }
-            SymbolType::Struct(sdef) => {
+            SymbolType::Struct(sdef) | SymbolType::Union(sdef) => {
                 let mut inits = Vec::new();
                 for field in sdef.borrow().members.iter() {
                     inits.push(self.make_zero_init(&field.stype)?);
+                    if stype.is_union() {
+                        // union special case, only first field is initialized
+                        break;
+                    }
                 }
                 Ok(Initializer::CompoundInit(inits))
             }
@@ -879,10 +883,6 @@ impl Parser {
                 }
             }
             (Initializer::CompoundInit(ci), SymbolType::Array(atype, size)) => {
-                if !dest_type.is_array() {
-                    bail!("Compound initializer not allowed here")
-                }
-
                 let mut values = Vec::new();
                 for elem_init in ci.iter() {
                     values.extend(self.process_static_initializer(value, 0, elem_init, atype)?);
@@ -902,6 +902,46 @@ impl Parser {
                     }
                 }
 
+                Ok(values)
+            }
+            (Initializer::CompoundInit(ci), SymbolType::Union(sdef)) => {
+                // union special case
+
+                let mut values = Vec::new();
+                let sdef = sdef.borrow();
+                if ci.len() > 1 {
+                    bail!("Union initializer can only have one element");
+                }
+                let field = sdef.members.first().unwrap();
+                if ci.is_empty() {
+                    // fill the rest with zeros
+                    let init = self.make_zero_init(&field.stype)?;
+                    values.extend(self.process_static_initializer(
+                        value,
+                        0,
+                        &init,
+                        &sdef.members[0].stype,
+                    )?);
+                } else {
+                    let field_init = ci.first().unwrap();
+
+                    values.extend(self.process_static_initializer(
+                        value,
+                        0,
+                        field_init,
+                        &field.stype,
+                    )?);
+                }
+                let size = Self::get_total_object_size(&field.stype)?;
+                if size != sdef.size {
+                    // padding
+                    let pad_size = sdef.size - size;
+                    println!(
+                        "padding struct {:?} with size {} {} {}",
+                        sdef.name, size, field.offset, field.name
+                    );
+                    values.push(StaticInit::InitNone(pad_size));
+                }
                 Ok(values)
             }
             (Initializer::CompoundInit(ci), SymbolType::Struct(sdef)) => {
@@ -984,6 +1024,10 @@ impl Parser {
         init: &Initializer,
         dest_type: &SymbolType,
     ) -> Result<()> {
+        println!(
+            "process_auto_initializer {:?} {} {:?} {:?}",
+            value, offset, init, dest_type
+        );
         // generates the code for stack vaiable initialization
         // returns nothing to the parser
         match (init, dest_type) {
@@ -1044,6 +1088,22 @@ impl Parser {
                         self.process_auto_initializer(value, elem_offset, &init, atype)?;
                     }
                 }
+            }
+            (Initializer::CompoundInit(ci), SymbolType::Union(sdef)) => {
+                // union special case
+                if !dest_type.is_union() {
+                    bail!("Compound initializer not allowed here");
+                }
+                // let mut values = Vec::new();
+                let sdef = sdef.borrow();
+                if ci.len() > 1 {
+                    bail!("Union initializer can only have one element");
+                }
+
+                let field_init = ci.first().unwrap();
+                assert!(sdef.members.len() > 0);
+                let field = sdef.members.first().unwrap();
+                self.process_auto_initializer(value, 0 + offset, field_init, &field.stype)?;
             }
             (Initializer::CompoundInit(ci), SymbolType::Struct(sdef)) => {
                 let mut field_idx = 0;
@@ -1136,6 +1196,12 @@ impl Parser {
                                 break;
                             }
                         }
+                        self.expect(Token::RightBrace)?;
+                    }
+                    SymbolType::Union(sdef) => {
+                        let first = sdef.borrow().members[0].clone();
+                        let field_type = first.stype.clone();
+                        values.push(self.parse_initializer(is_auto, &field_type)?);
                         self.expect(Token::RightBrace)?;
                     }
                     _ => bail!("Compound initializer not allowed here"),

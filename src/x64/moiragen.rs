@@ -78,13 +78,16 @@ impl X64BackEnd {
                 AssemblyType::ByteArray(0, align)
             }
             SymbolType::Void => unreachable!(),
-            SymbolType::Struct(_) => AssemblyType::ByteArray(0, 0),
+            SymbolType::Struct(_) | SymbolType::Union(_) => AssemblyType::ByteArray(0, 0),
         }
     }
 
     // chicken out route - copy entire struct into the stack of callee
     fn import_structure(&mut self, stype: &SymbolType, name: &str, op: &Operand) -> Result<()> {
-        assert!(matches!(stype, SymbolType::Struct(_)));
+        assert!(matches!(
+            stype,
+            SymbolType::Struct(_) | SymbolType::Union(_)
+        ));
         let size = Parser::get_total_object_size(stype)?;
         //  Structs and unions of size 8, 16, 32, or 64 bits,
         if !(size == 1 || size == 2 || size == 4 || size == 8) {
@@ -142,7 +145,7 @@ impl X64BackEnd {
         // - we pass a pointer to it in rcx
         // - shunt the other params down by one register
 
-        let shunt = if ret_type.is_struct() {
+        let shunt = if ret_type.is_struct_or_union() {
             let size = Parser::get_total_object_size(&ret_type)?;
             let register = Operand::Register(Register::RCX);
 
@@ -163,7 +166,7 @@ impl X64BackEnd {
             if reg_idx < int_reglist.len() {
                 let (param, stype) = &function.parameters[idx];
 
-                if stype.is_struct() {
+                if stype.is_struct_or_union() {
                     let reg = Operand::Register(int_reglist[reg_idx].clone());
                     self.import_structure(stype, param, &reg)?;
                 } else {
@@ -183,7 +186,7 @@ impl X64BackEnd {
                 let (param, stype) =
                     &function.parameters[(function.parameters.len() - reg_idx) + 3];
                 let assembly_type = Self::get_assembly_type(stype);
-                if stype.is_struct() {
+                if stype.is_struct_or_union() {
                     let reg = Operand::Register(Register::R10);
                     self.moira(Instruction::Mov(
                         assembly_type.clone(),
@@ -232,7 +235,10 @@ impl X64BackEnd {
 
     // makes a local copy of a struct and return a pointer to it
     fn clone_struct(&mut self, arg: &tacky::Value, reg: &Operand) -> Result<()> {
-        assert!(matches!(arg.stype(), SymbolType::Struct(_)));
+        assert!(matches!(
+            arg.stype(),
+            SymbolType::Struct(_) | SymbolType::Union(_)
+        ));
         let size = Parser::get_total_object_size(&arg.stype())?;
         if !(size == 1 || size == 2 || size == 4 || size == 8) {
             let (src_op, stype) = self.get_block_mem(arg, 0);
@@ -261,7 +267,9 @@ impl X64BackEnd {
                 if let Some(value) = value {
                     let (value, ret_type, assembly_type) = self.get_value(value);
                     let size = Parser::get_total_object_size(&ret_type)?;
-                    if ret_type.is_struct() && !(size == 1 || size == 2 || size == 4 || size == 8) {
+                    if ret_type.is_struct_or_union()
+                        && !(size == 1 || size == 2 || size == 4 || size == 8)
+                    {
                         // picking up the RCX value that the prolog saved
                         let register = Operand::Register(Register::RAX);
                         self.moira(Instruction::Pop(register.clone()));
@@ -360,7 +368,7 @@ impl X64BackEnd {
             tacky::Instruction::Copy(src, dest) => {
                 // bit blit to different types allowed
 
-                if src.is_struct() && dest.is_struct() {
+                if src.stype().is_struct_or_union() && dest.stype().is_struct_or_union() {
                     let (src_op, src_stype) = self.get_block_mem(src, 0);
                     let (dest_op, _dest_stype) = self.get_block_mem(dest, 0);
                     self.moira(Instruction::CopyBlock(
@@ -435,7 +443,7 @@ impl X64BackEnd {
 
                 let shunt = if dest.is_some() {
                     let retval = dest.clone().unwrap();
-                    if retval.is_struct() {
+                    if retval.stype().is_struct_or_union() {
                         let (_, arg_stype, _arg_assembly_type) = self.get_value(&retval);
                         let size = Parser::get_total_object_size(&arg_stype)?;
                         let register = Operand::Register(Register::RCX);
@@ -474,7 +482,7 @@ impl X64BackEnd {
                     if reg_idx < int_reglist.len() {
                         let arg = &args[idx];
 
-                        if arg.is_struct() {
+                        if arg.stype().is_struct_or_union() {
                             self.clone_struct(
                                 arg,
                                 &Operand::Register(int_reglist[reg_idx].clone()),
@@ -492,19 +500,11 @@ impl X64BackEnd {
                     } else {
                         let arg = &args[(args.len() - reg_idx) + 3];
                         let (argval, _arg_stype, arg_assembly_type) = self.get_value(arg);
-                        if arg.is_struct() {
+                        if arg.stype().is_struct_or_union() {
                             self.clone_struct(arg, &Operand::Register(Register::R10))?;
                             //stack_delta += delta;
                             self.moira(Instruction::Push(Operand::Register(Register::R10)));
-                            stack_delta += 8; //Parser::get_total_object_size(&arg.stype())?;
-                                              // self.moira(Instruction::Mov(
-                                              //     AssemblyType::QuadWord,
-                                              //     Operand::Register(Register::R10),
-                                              //     Operand::Memory(
-                                              //         Register::RSP,
-                                              //         (32 + 8 * (idx - int_reglist.len())) as i32,
-                                              //     ),
-                                              // ));
+                            stack_delta += 8;
                         } else {
                             stack_delta += 8;
                             match argval {
@@ -542,14 +542,10 @@ impl X64BackEnd {
                 self.moira(Instruction::DeallocateStack(stack_delta));
                 if let Some(dest) = dest {
                     let (dest_op, stype, ret_assembly_type) = self.get_value(dest);
-                    if dest.is_struct() {
-                        //   let (argval, arg_stype, arg_assembly_type) = self.get_value(&retval);
+                    if dest.stype().is_struct_or_union() {
                         let size = Parser::get_total_object_size(&stype)?;
-                        // let register = Operand::Register(Register::RCX);
 
                         if !(size == 1 || size == 2 || size == 4 || size == 8) {
-                            // self.clone_struct(&retval, &register)?;
-                            // 1
                         } else {
                             self.moira(Instruction::Mov(
                                 ret_assembly_type.clone(),
@@ -765,7 +761,7 @@ impl X64BackEnd {
                 }
             }
             tacky::Instruction::Load(ptr, dest) => {
-                if ptr.stype().get_inner_type()?.is_struct() {
+                if ptr.stype().get_inner_type()?.is_struct_or_union() {
                     assert!(ptr.stype().get_inner_type()? == dest.stype());
                     let (ptr_op, _ptr_stype) = self.get_block_mem(ptr, 0);
                     let (dest_op, _dest_stype) = self.get_block_mem(dest, 0);
@@ -796,7 +792,7 @@ impl X64BackEnd {
                 }
             }
             tacky::Instruction::Store(src, ptr) => {
-                if ptr.stype().get_inner_type()?.is_struct() {
+                if ptr.stype().get_inner_type()?.is_struct_or_union() {
                     assert!(ptr.stype().get_inner_type()? == src.stype());
                     let (ptr_op, _ptr_stype) = self.get_block_mem(ptr, 0);
                     let (dest_op, _dest_stype) = self.get_block_mem(src, 0);
@@ -1205,7 +1201,7 @@ impl X64BackEnd {
                         symbol_type.clone(),
                         assembly_type,
                     )
-                } else if symbol_type.is_struct() {
+                } else if symbol_type.is_struct_or_union() {
                     let align = X64CodeGenerator::calculate_alignment(symbol_type);
                     let total_size = Parser::get_total_object_size(symbol_type).unwrap();
 

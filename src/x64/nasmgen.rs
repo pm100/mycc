@@ -115,7 +115,7 @@ impl X64CodeGenerator {
                     _ => todo!(),
                 }
             }
-            SymbolType::Struct(sdef) => {
+            SymbolType::Struct(sdef) | SymbolType::Union(sdef) => {
                 //    let sdef = self.moira.structure_defs.get(sname).unwrap();
                 return sdef.borrow().alignment;
                 //return 16;

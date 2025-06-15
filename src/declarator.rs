@@ -68,6 +68,11 @@ impl Parser {
                 if base_type.is_void() {
                     bail!("Array type cannot be void");
                 }
+                if let SymbolType::Struct(sdef) | SymbolType::Union(sdef) = base_type {
+                    if sdef.borrow().size == 0 {
+                        bail!("Array type cannot be empty struct or union");
+                    }
+                }
                 let stype = SymbolType::Array(Box::new(base_type.clone()), *size);
                 Self::process_declarator(pdecl, &stype)
             }
@@ -310,6 +315,9 @@ impl Parser {
 
     fn parse_one_param(&mut self) -> Result<Parameter> {
         let specifiers = self.parse_specifiers(false)?;
+        if specifiers.specified_type.is_none() {
+            bail!("Parameter type must be specified");
+        }
         let base_type = specifiers.specified_type.clone().unwrap();
         let param = self.parse_declarator()?;
         indent(&format!("{:?}", param));
@@ -333,22 +341,34 @@ impl Parser {
         let mut double = false;
         let mut char = false;
         let mut void = false;
-        let mut structure = false;
+        let mut struct_or_union = false;
 
         loop {
             let token = self.peek()?;
             match token {
-                Token::Struct => {
-                    self.next_token()?;
-                    if structure {
+                Token::Struct | Token::Union => {
+                    let token = self.next_token()?;
+                    let is_union = token == Token::Union;
+                    if struct_or_union {
                         bail!("Duplicate struct specifier");
                     }
-                    structure = true;
+                    struct_or_union = true;
                     let name = expect!(self, Token::Identifier);
 
                     if let Some((_, unique_name)) = self.lookup_struct(&name) {
                         let sdef = self.tacky.structs.get(&unique_name).unwrap();
-                        specifiers.specified_type = Some(SymbolType::Struct(sdef.clone()));
+                        if is_union {
+                            if !sdef.borrow().is_union {
+                                bail!("not union {}", name);
+                            }
+                            specifiers.specified_type = Some(SymbolType::Union(sdef.clone()));
+                        } else {
+                            if sdef.borrow().is_union {
+                                bail!("not struct {}", name);
+                            }
+
+                            specifiers.specified_type = Some(SymbolType::Struct(sdef.clone()));
+                        }
                     } else {
                         self.dump_struct_map();
                         bail!("Unknown struct name: {}", name);
@@ -459,7 +479,7 @@ impl Parser {
                 _ => break,
             };
         }
-        if structure {
+        if struct_or_union {
             if int || long || long_long || char || signed || unsigned || double {
                 bail!("other types and struct cannot be used together");
             }
@@ -518,7 +538,7 @@ impl Parser {
         Ok(specifiers)
     }
     pub fn parse_struct(&mut self) -> Result<()> {
-        self.next_token()?;
+        let is_union = self.next_token()? == Token::Union;
 
         let name = expect!(self, Token::Identifier);
         let sptr = if let Some((in_this_scope, unique_name)) = self.lookup_struct(&name) {
@@ -532,6 +552,9 @@ impl Parser {
 
                     bail!("Struct {} already defined", name);
                 }
+                if sdef.borrow().is_union != is_union {
+                    bail!("struct is union already or vice versa")
+                }
                 sdef.clone()
             } else {
                 // we are shadowing a previous definition
@@ -542,6 +565,7 @@ impl Parser {
                     unique_name: new_name.clone(),
                     size: 0,
                     alignment: 0,
+                    is_union,
                 };
                 Rc::new(RefCell::new(structure.clone()))
             }
@@ -553,6 +577,7 @@ impl Parser {
                 unique_name: new_name.clone(),
                 size: 0,
                 alignment: 0,
+                is_union,
             };
             Rc::new(RefCell::new(structure.clone()))
         };
@@ -569,7 +594,8 @@ impl Parser {
 
             self.next_token()?;
             let mut offset = 0;
-            let mut largest = SymbolType::Char;
+            let mut largest = SymbolType::Void;
+            let mut max_align = 0;
             loop {
                 if self.peek()? == Token::RightBrace {
                     self.next_token()?;
@@ -589,28 +615,44 @@ impl Parser {
                 }
 
                 offset += self.pad(&member_type, offset);
-
+                let mem_off = if is_union { 0 } else { offset };
                 let member = StructMember {
                     name: member_name.clone(),
                     stype: member_type.clone(),
-                    offset,
+                    offset: mem_off,
                 };
                 let align = self.get_alignment(&member_type);
+                max_align = if align > max_align { align } else { max_align };
                 let size = Self::get_total_object_size(&member_type)?;
                 offset += size;
-                if align > Self::get_total_object_size(&largest)? {
+                if size > Self::get_total_object_size(&largest)? {
                     largest = member_type;
                 }
                 let mut structure = sptr.borrow_mut();
                 structure.members.push(member);
             }
-            offset += self.pad(&largest, offset);
             let mut structure = sptr.borrow_mut();
-            structure.size = offset;
-            structure.alignment = self.get_alignment(&largest);
-            if offset == 0 {
+            if structure.members.len() == 0 {
                 bail!("Empty struct");
             }
+            if is_union {
+                let align = max_align; //self.get_alignment(&largest);
+                let size = Self::get_total_object_size(&largest)?;
+                let rem = size % align;
+                let pad = if rem == 0 { 0 } else { align - rem };
+                //let pad = size % align;
+                println!(
+                    "union {} size {} align {} pad {}",
+                    structure.name, size, align, pad
+                );
+                structure.alignment = max_align;
+                structure.size = pad + size;
+            } else {
+                structure.alignment = self.get_alignment(&largest);
+                let final_size = offset + self.pad(&largest, offset);
+                structure.size = final_size;
+            };
+            // offset += self.pad(&largest, offset);
         } else {
             self.struct_lookup
                 .last_mut()

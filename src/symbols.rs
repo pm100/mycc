@@ -33,8 +33,8 @@ pub enum SymbolType {
     Function(Vec<SymbolType>, Box<SymbolType>),
     Pointer(Box<SymbolType>),
     Array(Box<SymbolType>, usize),
-    Struct(StructurePtr), // true means arg_ptr
-                          //StructArg(StructurePtr),
+    Struct(StructurePtr),
+    Union(StructurePtr), // for unions
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -88,7 +88,9 @@ impl PartialEq for SymbolType {
             (SymbolType::Struct(s1), SymbolType::Struct(s2)) => {
                 s1.borrow().unique_name == s2.borrow().unique_name
             }
-
+            (SymbolType::Union(s1), SymbolType::Union(s2)) => {
+                s1.borrow().unique_name == s2.borrow().unique_name
+            }
             _ => false,
         }
     }
@@ -113,6 +115,9 @@ impl fmt::Debug for SymbolType {
             SymbolType::Struct(s) => {
                 write!(f, "struct {} ({})", s.borrow().unique_name, s.borrow().name)
             }
+            SymbolType::Union(s) => {
+                write!(f, "union {} ({})", s.borrow().unique_name, s.borrow().name)
+            }
         }
     }
 }
@@ -134,6 +139,9 @@ impl SymbolType {
     }
     pub fn is_scalar(&self) -> bool {
         Parser::is_scalar(self)
+    }
+    pub fn is_struct_or_union(&self) -> bool {
+        matches!(self, SymbolType::Struct(_) | SymbolType::Union(_))
     }
 }
 impl Parser {
@@ -196,11 +204,15 @@ impl Parser {
                     bail!("Structure {:?} is incomplete", stype);
                 }
                 size
-            } // SymbolType::StructArg(_) => stype.as_struct_arg().unwrap().borrow().size,
-            _ => {
-                
-                Self::get_size_of_stype(stype)
             }
+            SymbolType::Union(_) => {
+                let size = stype.as_union().unwrap().borrow().size;
+                if size == 0 {
+                    bail!("Structure {:?} is incomplete", stype);
+                }
+                size
+            } // SymbolType::StructArg(_) => stype.as_struct_arg().unwrap().borrow().size,
+            _ => Self::get_size_of_stype(stype),
         };
         Ok(size)
     }

@@ -26,6 +26,7 @@ impl Parser {
             SymbolType::Void => 0,
             SymbolType::Array(stype, _) => self.get_alignment(stype),
             SymbolType::Struct(s) => s.borrow().alignment,
+            SymbolType::Union(s) => s.borrow().alignment,
             SymbolType::Pointer(_) => 8,
             _ => panic!("Unknown type"),
         }
@@ -50,6 +51,7 @@ impl Parser {
                 | SymbolType::Void
                 | SymbolType::Function(_, _)
                 | SymbolType::Struct(_)
+                | SymbolType::Union(_)
         )
     }
     pub fn is_integer(stype: &SymbolType) -> bool {

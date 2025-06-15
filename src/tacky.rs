@@ -192,7 +192,7 @@ pub struct Structure {
     pub name: String,
     pub unique_name: String,
     pub members: Vec<StructMember>,
-
+    pub is_union: bool,
     pub size: usize,
     pub alignment: usize,
 }
@@ -274,33 +274,7 @@ impl TackyProgram {
         });
         self.current_function = self.functions.len() - 1;
     }
-    // fn get_assembly_type(value: &Value) -> AssemblyType {
-    //     match value {
-    //         Value::Int32(_) => AssemblyType::LongWord,
-    //         Value::Int64(_) => AssemblyType::QuadWord,
-    //         Value::UInt32(_) => AssemblyType::LongWord,
-    //         Value::UInt64(_) => AssemblyType::QuadWord,
-    //         Value::Double(_) => AssemblyType::QuadWord,
-    //         Value::Char(_) => AssemblyType::Byte,
-    //         Value::UChar(_) => AssemblyType::Byte,
-    //         Value::String(_) => todo!(),
-    //         Value::Variable(_, stype) => match stype {
-    //             SymbolType::Int32 | SymbolType::UInt32 => AssemblyType::LongWord,
-    //             SymbolType::Int64 | SymbolType::UInt64 => AssemblyType::QuadWord,
-    //             SymbolType::Double => AssemblyType::QuadWord,
-    //             SymbolType::Char => AssemblyType::Byte,
-    //             SymbolType::SChar => AssemblyType::Byte,
-    //             SymbolType::UChar => AssemblyType::Byte,
-    //             SymbolType::Function(_, _) => AssemblyType::QuadWord, // TODO
-    //             SymbolType::Pointer(_) => AssemblyType::QuadWord,
-    //             SymbolType::Array(_, _) => todo!(), // TODO
-    //             SymbolType::Void => unreachable!("Void type should not be used in assembly"),
-    //             SymbolType::Struct(_) => todo!(), // TODO
-    //         },
-    //         Value::Void => unreachable!("Void type should not be used in assembly"),
-    //         //   SymbolType::Void => unreachable!("Void type should not be used in assembly"),
-    //     }
-    // }
+
     pub(crate) fn add_instruction(&mut self, instruction: Instruction) {
         self.functions[self.current_function]
             .instructions

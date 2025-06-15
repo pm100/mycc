@@ -323,16 +323,10 @@ impl Parser {
             left = PendingResult::PlainValue(dest);
         }
         if let PendingResult::PlainValue(ref left) = left {
-            if Self::get_type(left).is_struct()
-                && left
-                    .stype()
-                    .as_struct()
-                    .unwrap()
-                    .borrow()
-                    .members
-                    .is_empty()
-            {
-                bail!("Cannot return empty struct from expression");
+            if let SymbolType::Struct(sdef) | SymbolType::Union(sdef) = Self::get_type(left) {
+                if sdef.borrow().members.is_empty() {
+                    bail!("Cannot return empty struct from expression");
+                }
             }
         }
         Ok(left)
@@ -353,6 +347,10 @@ impl Parser {
             pointer.clone()
         };
         assert!(pointer.is_pointer());
+        if pointer.is_void_pointer() {
+            // we can only add integers to void pointers
+            bail!("Cannot add / subtract pointer");
+        }
         let delta = if *op == BinaryOperator::Subtract {
             match delta {
                 Value::Int64(v) => Value::Int64(-v),
@@ -448,9 +446,8 @@ impl Parser {
             // easy case
             return Ok(value.clone());
         }
-        if let SymbolType::Struct(vsdef) = &vtype {
-            if target_type.is_struct() {
-                let target_sdef = target_type.as_struct().unwrap();
+        if let SymbolType::Struct(vsdef) | SymbolType::Union(vsdef) = &vtype {
+            if let SymbolType::Union(target_sdef) | SymbolType::Struct(target_sdef) = target_type {
                 if target_sdef.borrow().unique_name == vsdef.borrow().unique_name {
                     // same struct, so we can just copy it
                     if Self::get_total_object_size(&vtype)? > 8 {
@@ -526,6 +523,7 @@ impl Parser {
             SymbolType::Char => 1,
             SymbolType::UChar => 1,
             SymbolType::SChar => 1,
+            SymbolType::Void => 0,
             _ => unreachable!(),
         }
     }
@@ -1168,12 +1166,16 @@ impl Parser {
                             | Token::Char
                             | Token::Void
                             | Token::Struct
+                            | Token::Union
                     ) {
                         println!("sizeof expr");
                         self.suppress_output = true;
                         let exp = self.parse_cast()?;
 
                         let exp_rv = self.inner_make_rv(&exp, true)?;
+                        if exp_rv.stype().is_void() {
+                            bail!("Cannot use sizeof on void type");
+                        }
                         self.suppress_output = false;
                         //let stype = Self::get_type(&exp_rv);
                         let size = if exp_rv.is_string() {
@@ -1187,6 +1189,12 @@ impl Parser {
                         println!("sizeof cast");
                         self.next_token()?;
                         let target_type = self.parse_type_name()?;
+                        if target_type.is_void() {
+                            bail!("Cannot use sizeof on void type");
+                        }
+                        if target_type.is_array() && target_type.get_inner_type()?.is_void() {
+                            bail!("Cannot use sizeof on void type");
+                        }
                         self.expect(Token::RightParen)?;
                         let size = Self::get_total_object_size(&target_type)?;
                         return Ok(PendingResult::PlainValue(Value::UInt64(size as u64)));
@@ -1230,6 +1238,7 @@ impl Parser {
                 | Token::Char
                 | Token::Void
                 | Token::Struct
+                | Token::Union
         ) {
             // cast
             self.next_token()?;
@@ -1239,16 +1248,10 @@ impl Parser {
             let source = self.parse_cast()?;
 
             let source = self.make_rvalue(&source)?;
-            if source.is_struct()
-                && source
-                    .stype()
-                    .as_struct()
-                    .unwrap()
-                    .borrow()
-                    .members
-                    .is_empty()
-            {
-                bail!("Cannot cast incomplete struct");
+            if let SymbolType::Struct(sdef) | SymbolType::Union(sdef) = source.stype() {
+                if sdef.borrow().members.is_empty() {
+                    bail!("Cannot cast incomplete struct");
+                }
             }
             let ret_dest = self.make_temporary(&target_type);
             let converted = self.convert_to(&source, &target_type, true)?;
@@ -1334,14 +1337,14 @@ impl Parser {
         match val.clone() {
             PendingResult::PlainValue(v) => {
                 if let Value::Variable(_name, stype) = v {
-                    if let SymbolType::Struct(sdef) = stype {
+                    if let SymbolType::Struct(sdef) | SymbolType::Union(sdef) = stype {
                         if let Some(fdef) =
                             sdef.borrow().members.iter().find(|m| m.name == field_name)
                         {
                             return Ok(fdef.clone());
                         }
                         bail!(
-                            "Field {} not found in struct {}",
+                            "Field {} not found in struct or union {}",
                             field_name,
                             sdef.borrow().name
                         );
@@ -1354,10 +1357,11 @@ impl Parser {
                         SymbolType::Pointer(sym) => *sym,
                         _ => bail!("Expected pointer, got {:?}", stype),
                     };
-                    if !sym.is_struct() {
-                        bail!("Expected struct, got {:?}", sym);
-                    }
-                    let sdef = sym.as_struct().unwrap();
+                    let sdef = match sym {
+                        SymbolType::Struct(sdef) => sdef,
+                        SymbolType::Union(sdef) => sdef,
+                        _ => bail!("Expected struct or union, got {:?}", sym),
+                    };
                     if let Some(fdef) = sdef.borrow().members.iter().find(|m| m.name == field_name)
                     {
                         return Ok(fdef.clone());
@@ -1371,13 +1375,13 @@ impl Parser {
                 }
             }
             PendingResult::SubObject(_v, stype, _offset) => {
-                if let SymbolType::Struct(sdef) = stype {
+                if let SymbolType::Struct(sdef) | SymbolType::Union(sdef) = stype {
                     if let Some(fdef) = sdef.borrow().members.iter().find(|m| m.name == field_name)
                     {
                         return Ok(fdef.clone());
                     }
                     bail!(
-                        "Field {} not found in struct {}",
+                        "Field {} not found in struct or union{}",
                         field_name,
                         sdef.borrow().name
                     );
@@ -1756,6 +1760,20 @@ impl Parser {
             );
         }
         match (op, left_type, right_type) {
+            (
+                BinaryOperator::Add | BinaryOperator::Subtract,
+                SymbolType::Pointer(_),
+                SymbolType::Int32 | SymbolType::Int64 | SymbolType::UInt32 | SymbolType::UInt64,
+            ) => {
+                if left_type.is_void_pointer() {
+                    bail!("Cannot add pointer to void pointer")
+                }
+            }
+            (BinaryOperator::Subtract, SymbolType::Pointer(_), SymbolType::Pointer(_)) => {
+                if left_type.is_void_pointer() || right_type.is_void_pointer() {
+                    bail!("Cannot subtract from void pointer")
+                }
+            }
             (BinaryOperator::Add, SymbolType::Pointer(_), SymbolType::Pointer(_)) => {
                 bail!("Cannot add two pointers")
             }

@@ -98,6 +98,7 @@ pub enum Token {
     Char,
     Sizeof,
     Struct,
+    Union,
 
     // special
     Eof,
@@ -390,6 +391,7 @@ impl Lexer {
             "char" => Token::Char,
             "sizeof" => Token::Sizeof,
             "struct" => Token::Struct,
+            "union" => Token::Union,
 
             _ => Token::Identifier(s.to_string()),
         }
