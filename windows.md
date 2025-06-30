@@ -101,7 +101,7 @@ The main difference is that when a struct / union is passed or returned from a f
 - First four arguments are passed in registers, note the difference for how XMM and regular registers are used
 - The rest are pushed
 
-V important, note the requirement to allocate 32 bytes of stack for the caller to provide it with stack space to store the register arguments if it wants to.
+V important, note the requirement to allocate 32 bytes of stack for the callee to provide it with stack space to store the register arguments if it wants to.
 
 ### Struct as argument
 
