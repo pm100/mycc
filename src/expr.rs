@@ -280,8 +280,9 @@ impl Parser {
                         } else {
                             left_rv.clone()
                         };
+                        let shift_dist = self.convert_to(&right, &SymbolType::Int32, true)?;
                         let dest = self.make_temporary(&promo.stype());
-                        self.instruction(Instruction::Binary(op, promo, right, dest.clone()));
+                        self.instruction(Instruction::Binary(op, promo, shift_dist, dest.clone()));
                         dest
                     } else {
                         let is_comp =

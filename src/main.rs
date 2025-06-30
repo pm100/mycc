@@ -3,6 +3,7 @@ pub mod cpp;
 pub mod declarator;
 pub mod expr;
 pub mod lexer;
+pub mod optimize;
 pub mod parser;
 pub mod parser_utils;
 pub mod symbols;
@@ -13,6 +14,7 @@ use anyhow::Result;
 use clap::Parser;
 use codegen::BackEnd;
 use log::{info, LevelFilter};
+use optimize::OptimizeFlags;
 use simplelog::{CombinedLogger, Config, WriteLogger};
 use std::env;
 use std::fs::File;
@@ -38,6 +40,19 @@ struct Cli {
     compile_only: bool,
     #[arg(short, long)]
     verbose: bool,
+    #[arg(short = 's')]
+    assembler: bool,
+    #[arg(long)]
+    fold_constants: bool,
+    #[arg(long)]
+    propagate_copies: bool,
+    #[arg(long)]
+    eliminate_unreachable_code: bool,
+
+    #[arg(long)]
+    eliminate_dead_stores: bool,
+    #[arg(long)]
+    optimize: bool,
 }
 fn main() -> ExitCode {
     let _ = CombinedLogger::init(vec![
@@ -49,7 +64,27 @@ fn main() -> ExitCode {
         ),
     ]);
     let mut cli = Cli::parse();
-
+    let optimize_flags = if cli.optimize {
+        OptimizeFlags::CONSTANT_FOLD
+            | OptimizeFlags::DEAD_STORE
+            | OptimizeFlags::COPY_PROP
+            | OptimizeFlags::UNREACHABLE
+    } else {
+        let mut flags = OptimizeFlags::empty();
+        if cli.fold_constants {
+            flags |= OptimizeFlags::CONSTANT_FOLD;
+        }
+        if cli.propagate_copies {
+            flags |= OptimizeFlags::COPY_PROP;
+        }
+        if cli.eliminate_unreachable_code {
+            flags |= OptimizeFlags::UNREACHABLE;
+        }
+        if cli.eliminate_dead_stores {
+            flags |= OptimizeFlags::DEAD_STORE;
+        }
+        flags
+    };
     if env::var("USE_MSVC").is_ok() {
         let source = cli.source.display().to_string().replace("/", "\\");
         let source = PathBuf::from(source);
@@ -108,7 +143,14 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
     cli.source.set_extension("exe");
-    match build(&preproc_output, &cli.source, &cli.source, cli.compile_only) {
+    match build(
+        &preproc_output,
+        &cli.source,
+        &cli.source,
+        cli.compile_only,
+        cli.assembler,
+        optimize_flags,
+    ) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("build error {:?}", e);
@@ -156,24 +198,38 @@ fn codegen(path: &Path, real_source: &Path) -> Result<()> {
     Ok(())
 }
 
-fn build(source: &Path, output: &Path, real_source: &Path, compile_only: bool) -> Result<()> {
+fn build(
+    source: &Path,
+    output: &Path,
+    real_source: &Path,
+    compile_only: bool,
+    assembly: bool,
+    optimize_flags: OptimizeFlags,
+) -> Result<()> {
     let mut parser = parser::Parser::new(source, real_source);
-    let tackyx = parser.parse();
-    match tackyx {
-        Ok(tacky) => {
-            tacky.dump();
-            let mut backend = X64BackEnd::new();
-            let stub = "mycc_cpp";
-            // let gen_output = std::env::temp_dir().join(format!("{}.s", stub));
-            let gen_output = PathBuf::from(format!("{}.asm", stub));
-            backend.compile(tacky, &gen_output)?;
-            crate::cpp::assemble_link(&gen_output, output, compile_only)?;
+    parser.parse()?;
+
+    parser.tacky.dump();
+    parser.optimize(optimize_flags)?;
+
+    let mut backend = X64BackEnd::new();
+    let stub = "mycc_cpp";
+    // let gen_output = std::env::temp_dir().join(format!("{}.s", stub));
+    let gen_output = if assembly {
+        let mut asm = real_source.to_path_buf();
+        if !asm.set_extension("s") {
+            return Err(anyhow::anyhow!(
+                "Failed to set extension for assembly output"
+            ));
         }
-        Err(e) => {
-            //println!("Error: {:?}", e);
-            return Err(e);
-        }
-    }
+        // let x = src_path.parent().join(src_)
+        asm
+    } else {
+        PathBuf::from(format!("{}.asm", stub))
+    };
+    backend.compile(&parser.tacky, &gen_output)?;
+    crate::cpp::assemble_link(&gen_output, output, compile_only | assembly)?;
+
     //tacky.dump();
     Ok(())
 }

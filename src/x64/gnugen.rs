@@ -1,9 +1,8 @@
 use crate::parser::Parser;
 use crate::symbols::SymbolType;
+use crate::tacky::StaticInit;
 use crate::x64::moira::{Function, MoiraProgram};
 
-//use crate::codegen::MoiraCompiler;
-use crate::tacky::StaticInit;
 use anyhow::Result;
 use std::collections::HashMap;
 use std::io::Write;
@@ -15,13 +14,8 @@ use super::moira_inst::{
 pub struct X64CodeGenerator {
     pseudo_registers: HashMap<String, i32>,
     next_offset: i32,
-    func_table: HashMap<String, FunctionDesc>,
 }
-#[derive(Debug, Clone)]
-struct FunctionDesc {
-    name: String,
-    external: bool,
-}
+
 const SCRATCH_REGISTER1: Register = Register::R10;
 const SCRATCH_REGISTER2: Register = Register::R11;
 const FLOAT_SCRATCH1: Register = Register::XMM14;
@@ -38,7 +32,7 @@ impl X64CodeGenerator {
         Self {
             pseudo_registers: HashMap::new(),
             next_offset: 0,
-            func_table: HashMap::new(),
+            //      func_table: HashMap::new(),
         }
     }
     pub fn generate_asm(&mut self, moira: &MoiraProgram, file: &Path) -> Result<()> {
@@ -51,40 +45,11 @@ impl X64CodeGenerator {
         moira: &MoiraProgram,
         writer: &mut BufWriter<std::fs::File>,
     ) -> Result<()> {
-        // all the functions we define in this file
-        self.func_table = moira
-            .functions
-            .iter()
-            .map(|f| {
-                (
-                    f.name.clone(),
-                    FunctionDesc {
-                        name: f.name.clone(),
-                        external: false,
-                    },
-                )
-            })
-            .collect::<HashMap<_, _>>();
-        println!(
-            "Generating x64 code for {:?} functions",
-            self.func_table.len()
-        );
-        writeln!(writer, "bits 64")?;
-        writeln!(writer, "default rel")?;
         self.gen_vars(moira, writer)?;
-        writeln!(writer, "segment .text")?;
+        writeln!(writer, ".text")?;
         for idx in 0..moira.functions.len() {
             let function = moira.functions[idx].clone();
             self.gen_function(&function, writer)?;
-        }
-
-        for name in self
-            .func_table
-            .iter()
-            .filter(|(_, v)| v.external)
-            .map(|(_, v)| v.name.clone())
-        {
-            writeln!(writer, "extern {}", name)?;
         }
 
         Ok(())
@@ -116,9 +81,7 @@ impl X64CodeGenerator {
                 }
             }
             SymbolType::Struct(sdef) | SymbolType::Union(sdef) => {
-                //    let sdef = self.moira.structure_defs.get(sname).unwrap();
                 return sdef.borrow().alignment;
-                //return 16;
             }
             _ => unreachable!(),
         }
@@ -130,7 +93,7 @@ impl X64CodeGenerator {
     ) -> Result<()> {
         for var in moira.top_vars.iter() {
             if var.external {
-                writeln!(writer, "extern {}", var.name)?;
+                writeln!(writer, ".extern {}", var.name)?;
                 continue;
             }
             let empty = var.init.iter().all(|v| match v {
@@ -146,47 +109,47 @@ impl X64CodeGenerator {
                 _ => false,
             });
             if empty {
-                writeln!(writer, "segment .bss")?;
+                writeln!(writer, ".bss")?;
             } else {
-                writeln!(writer, "segment .data")?;
+                writeln!(writer, ".data")?;
             }
             if var.global {
-                writeln!(writer, "global {}", var.name)?;
+                writeln!(writer, ".globl {}", var.name)?;
             }
 
             let align = Self::calculate_alignment(&var.stype);
-            writeln!(writer, "align {}", align)?;
+            writeln!(writer, ".align {}", align)?;
 
-            writeln!(writer, "${}: ", var.name)?;
+            writeln!(writer, "{}: ", var.name)?;
             if empty {
                 let size = Parser::get_total_object_size(&var.stype)?;
 
-                writeln!(writer, " resb {}", size)?;
+                writeln!(writer, " .zero {}", size)?;
             } else {
                 for init in var.init.iter() {
                     match init {
                         StaticInit::InitNone(count) => {
-                            writeln!(writer, " resb {}", count)?;
+                            writeln!(writer, " .zero {}", count)?;
                         }
-                        StaticInit::InitI32(value) => writeln!(writer, " dd {}", value)?,
-                        StaticInit::InitI64(value) => writeln!(writer, " dq {}", value)?,
-                        StaticInit::InitU32(value) => writeln!(writer, " dd {}", value)?,
-                        StaticInit::InitU64(value) => writeln!(writer, " dq {}", value)?,
-                        StaticInit::InitChar(value) => writeln!(writer, " db {}", value)?,
-                        StaticInit::InitUChar(value) => writeln!(writer, " db {}", value)?,
+                        StaticInit::InitI32(value) => writeln!(writer, " .long {}", value)?,
+                        StaticInit::InitI64(value) => writeln!(writer, " .quad {}", value)?,
+                        StaticInit::InitU32(value) => writeln!(writer, " .long {}", value)?,
+                        StaticInit::InitU64(value) => writeln!(writer, " .quad {}", value)?,
+                        StaticInit::InitChar(value) => writeln!(writer, " .byte {}", value)?,
+                        StaticInit::InitUChar(value) => writeln!(writer, " .byte {}", value)?,
                         StaticInit::InitDouble(value) => {
-                            writeln!(writer, " dq 0x{}", Self::double_to_hex(*value))?
+                            writeln!(writer, " .quad 0x{}", Self::double_to_hex(*value))?
                         }
                         StaticInit::InitString(value, zero) => {
                             for ch in value.chars() {
-                                writeln!(writer, " db 0x{:x}", ch as u8)?;
+                                writeln!(writer, " .byte 0x{:x}", ch as u8)?;
                             }
                             if *zero {
-                                writeln!(writer, " db 0")?;
+                                writeln!(writer, " .byte 0")?;
                             }
                         }
                         StaticInit::PointerInit(name) => {
-                            writeln!(writer, " dq {}", name)?;
+                            writeln!(writer, " .quad {}", name)?;
                         }
                     }
                 }
@@ -194,31 +157,30 @@ impl X64CodeGenerator {
         }
 
         for const_value in moira.static_constants.values() {
-            writeln!(writer, "segment .rodata")?;
+            writeln!(writer, ".section .rodata")?;
             if const_value.align != 0 {
-                writeln!(writer, "align {}", const_value.align)?;
+                writeln!(writer, ".align {}", const_value.align)?;
             }
             writeln!(writer, "{}: ", const_value.name)?;
-            //  writeln!(writer, "align {}", const_value.align)?;
             for init in const_value.init.iter() {
                 match init {
-                    StaticInit::InitI32(value) => writeln!(writer, " dd {}", value)?,
-                    StaticInit::InitI64(value) => writeln!(writer, " dq {}", value)?,
-                    StaticInit::InitU32(value) => writeln!(writer, " dd {}", value)?,
-                    StaticInit::InitU64(value) => writeln!(writer, " dq {}", value)?,
-                    StaticInit::InitChar(value) => writeln!(writer, " db {}", value)?,
-                    StaticInit::InitUChar(value) => writeln!(writer, " db {}", value)?,
+                    StaticInit::InitI32(value) => writeln!(writer, " .long {}", value)?,
+                    StaticInit::InitI64(value) => writeln!(writer, " .quad {}", value)?,
+                    StaticInit::InitU32(value) => writeln!(writer, " .long {}", value)?,
+                    StaticInit::InitU64(value) => writeln!(writer, " .quad {}", value)?,
+                    StaticInit::InitChar(value) => writeln!(writer, " .byte {}", value)?,
+                    StaticInit::InitUChar(value) => writeln!(writer, " .byte {}", value)?,
                     StaticInit::InitDouble(value) => {
-                        writeln!(writer, " dq 0x{}", Self::double_to_hex(*value))?
+                        writeln!(writer, " .quad 0x{}", Self::double_to_hex(*value))?
                     }
 
                     StaticInit::InitString(value, zero) => {
                         for ch in value.chars() {
-                            writeln!(writer, " db 0x{:x}", ch as u8)?;
+                            writeln!(writer, " .byte 0x{:x}", ch as u8)?;
                         }
 
                         if *zero {
-                            writeln!(writer, " db 0")?;
+                            writeln!(writer, " .byte 0")?;
                         }
                     }
                     _ => unreachable!(),
@@ -246,14 +208,11 @@ impl X64CodeGenerator {
     }
     fn gen_prologue(
         &mut self,
-        //    moira: &mut MoiraProgram<Instruction>,
         function: &Function,
         writer: &mut BufWriter<std::fs::File>,
     ) -> Result<()> {
-        //println!("Generating prologue for function: {}", function.name);
-
         if function.global {
-            writeln!(writer, "global {}", function.name)?;
+            writeln!(writer, ".globl {}", function.name)?;
         }
         // ensure stack is 16 byte aligned
         let mut adjust = self.next_offset % 16;
@@ -261,29 +220,37 @@ impl X64CodeGenerator {
             adjust = 16 - adjust;
         }
         writeln!(writer, "{}: ", function.name)?;
-        writeln!(writer, "        push rbp")?;
-        writeln!(writer, "        mov rbp, rsp")?;
-        writeln!(writer, "        sub rsp, {}", self.next_offset + adjust)?;
+        writeln!(writer, "        pushq %rbp")?;
+        writeln!(writer, "        movq  %rsp,%rbp")?;
+        writeln!(writer, "        subq ${}, %rsp", self.next_offset + adjust)?;
         Ok(())
     }
-
+    fn get_instruction_size_qual(assembly_type: &AssemblyType) -> &'static str {
+        match assembly_type {
+            AssemblyType::LongWord => "l",
+            AssemblyType::QuadWord => "q",
+            AssemblyType::Byte => "b",
+            AssemblyType::Word => "w",
+            AssemblyType::Double => "",
+            AssemblyType::ByteArray(_, _) => "",
+        }
+    }
     fn gen_instruction(
         &mut self,
         instruction: &Instruction,
         writer: &mut BufWriter<std::fs::File>,
     ) -> Result<()> {
-        println!("Generating instruction: {:?}", instruction);
         match instruction {
             Instruction::Ret => {
-                writeln!(writer, "        mov rsp, rbp")?;
-                writeln!(writer, "        pop rbp")?;
+                writeln!(writer, "        movq %rbp, %rsp")?;
+                writeln!(writer, "        popq %rbp")?;
                 writeln!(writer, "        ret")?;
             }
             Instruction::Mov(assembly_type, src, dest) => {
                 let dest_str = self.get_operand(dest, assembly_type)?;
                 let src_str = self.get_operand(
                     src,
-                    if dest_str == "cl" && Self::is_memory(src) {
+                    if dest_str == "%cl" && Self::is_memory(src) {
                         &AssemblyType::Byte
                     } else {
                         assembly_type
@@ -293,22 +260,23 @@ impl X64CodeGenerator {
                     writer,
                     "        {} {}, {}",
                     if *assembly_type == AssemblyType::Double {
-                        "movsd"
+                        "movsd".to_string()
                     } else {
-                        "mov"
+                        format!("mov{}", Self::get_instruction_size_qual(assembly_type)).to_string()
                     },
-                    dest_str,
-                    src_str
+                    src_str,
+                    dest_str
                 )?;
             }
             Instruction::Unary(operator, assembly_type, operand) => {
+                let qual = Self::get_instruction_size_qual(assembly_type);
                 let oper = match operator {
                     UnaryOperator::Neg => "neg",
                     UnaryOperator::Not => "not",
                     UnaryOperator::FNeg => todo!(),
                 };
                 let op = self.get_operand(operand, assembly_type)?;
-                writeln!(writer, "        {} {}", oper, op)?;
+                writeln!(writer, "        {}{} {}", oper, qual, op)?;
             }
             Instruction::Binary(operator, assembly_type, left, right) => {
                 let op = match (operator, assembly_type) {
@@ -327,6 +295,15 @@ impl X64CodeGenerator {
                     (BinaryOperator::FMul, _) => "mulsd",
                     (BinaryOperator::FDiv, _) => "divsd",
                 };
+                let qual = match assembly_type {
+                    AssemblyType::LongWord => "l",
+                    AssemblyType::QuadWord => "q",
+                    AssemblyType::Byte => "b",
+                    AssemblyType::Word => "w",
+                    AssemblyType::Double => "",
+                    AssemblyType::ByteArray(_, _) => todo!(),
+                };
+                let op = format!("{}{}", op, qual);
                 let left_at = if matches!(
                     operator,
                     BinaryOperator::ShiftRight
@@ -339,15 +316,17 @@ impl X64CodeGenerator {
                 };
                 let left_str = self.get_operand(left, &left_at)?;
                 let right_str = self.get_operand(right, assembly_type)?;
-                writeln!(writer, "        {} {}, {}", op, right_str, left_str)?;
+                writeln!(writer, "        {} {}, {}", op, left_str, right_str)?;
             }
             Instruction::Idiv(assembly_type, divisor) => {
                 let op = self.get_operand(divisor, assembly_type)?;
-                writeln!(writer, "        idiv {}", op)?;
+                let qual = Self::get_instruction_size_qual(assembly_type);
+                writeln!(writer, "        idiv{} {}", qual, op)?;
             }
             Instruction::Div(assembly_type, divisor) => {
                 let op = self.get_operand(divisor, assembly_type)?;
-                writeln!(writer, "        div {}", op)?;
+                let qual = Self::get_instruction_size_qual(assembly_type);
+                writeln!(writer, "        div{} {}", qual, op)?;
             }
             Instruction::Cdq(assembly_type) => {
                 match assembly_type {
@@ -359,12 +338,13 @@ impl X64CodeGenerator {
             Instruction::Cmp(assembly_type, left, right) => {
                 let left_str = self.get_operand(left, assembly_type)?;
                 let right_str = self.get_operand(right, assembly_type)?;
-                writeln!(writer, "        cmp {}, {}", right_str, left_str)?;
+                let qual = Self::get_instruction_size_qual(assembly_type);
+                writeln!(writer, "        cmp{} {}, {}", qual, left_str, right_str)?;
             }
             Instruction::FCmp(assembly_type, left, right) => {
                 let left_str = self.get_operand(left, assembly_type)?;
                 let right_str = self.get_operand(right, assembly_type)?;
-                writeln!(writer, "        comisd {}, {}", right_str, left_str)?;
+                writeln!(writer, "        comisd {}, {}", left_str, right_str)?;
             }
             Instruction::Jmp(label) => {
                 writeln!(writer, "        jmp {}", label)?;
@@ -393,60 +373,83 @@ impl X64CodeGenerator {
                 writeln!(writer, "        push {}", operand_str)?;
             }
             Instruction::Pop(operand) => {
+                let at = Self::get_assembly_type_from_operand(operand);
+                let qual = Self::get_instruction_size_qual(&at);
                 let operand_str = self.get_operand(operand, &AssemblyType::QuadWord)?;
-                writeln!(writer, "        pop {}", operand_str)?;
+                writeln!(writer, "        pop{} {}", qual, operand_str)?;
             }
             Instruction::DeallocateStack(size) => {
-                writeln!(writer, "        add rsp, {}", size)?;
+                writeln!(writer, "        addq ${}, %rsp", size)?;
             }
             Instruction::AllocateStack(size) => {
-                writeln!(writer, "        sub rsp, {}", size)?;
+                writeln!(writer, "        subq ${}, %rsp", size)?;
             }
             Instruction::MovSignExtend(src_at, dest_at, src, dest) => {
                 let src_str = self.get_operand(src, src_at)?;
                 let dest_str = self.get_operand(dest, dest_at)?;
-                writeln!(writer, "        movsx {}, {}", dest_str, src_str)?;
+                let dest_qual = Self::get_instruction_size_qual(dest_at);
+                let src_qual = Self::get_instruction_size_qual(src_at);
+                writeln!(
+                    writer,
+                    "        movs{}{} {}, {}",
+                    src_qual, dest_qual, src_str, dest_str
+                )?;
             }
             Instruction::MovZeroExtend(src_at, dest_at, src, dest) => {
                 let src_str = self.get_operand(src, src_at)?;
                 let dest_str = self.get_operand(dest, dest_at)?;
-                writeln!(writer, "        movzx {}, {}", dest_str, src_str)?;
+                let dest_qual = Self::get_instruction_size_qual(dest_at);
+                let src_qual = Self::get_instruction_size_qual(src_at);
+                writeln!(
+                    writer,
+                    "        movz{}{} {}, {}",
+                    src_qual, dest_qual, src_str, dest_str
+                )?;
             }
             Instruction::Cvttsdsi(assembly_type, src, dest) => {
                 let src_str = self.get_operand(src, &AssemblyType::Double)?;
                 let dest_str = self.get_operand(dest, assembly_type)?;
-                writeln!(writer, "        cvttsd2si {}, {}", dest_str, src_str)?;
+                let src_qual = Self::get_instruction_size_qual(assembly_type);
+                writeln!(
+                    writer,
+                    "        cvttsd2si{} {}, {}",
+                    src_qual, src_str, dest_str
+                )?;
             }
             Instruction::Cvtsi2sd(assembly_type, src, dest) => {
                 let src_str = self.get_operand(src, assembly_type)?;
                 let dest_str = self.get_operand(dest, assembly_type)?;
-                writeln!(writer, "        cvtsi2sd {}, {}", dest_str, src_str)?;
+                let src_qual = Self::get_instruction_size_qual(assembly_type);
+                writeln!(
+                    writer,
+                    "        cvtsi2sd{} {}, {}",
+                    src_qual, src_str, dest_str
+                )?;
             }
             Instruction::Lea(src, dest) => {
                 let src_str = self.get_operand(src, &AssemblyType::QuadWord)?;
                 let dest_str = self.get_operand(dest, &AssemblyType::QuadWord)?;
-                writeln!(writer, "        lea {}, {}", dest_str, src_str)?;
+                writeln!(writer, "        lea {}, {}", src_str, dest_str)?;
             }
             Instruction::CopyBlock(src, dest, size) => {
                 let src_str = self.get_operand(src, &AssemblyType::ByteArray(0, 0))?;
                 let dest_str = self.get_operand(dest, &AssemblyType::ByteArray(0, 0))?;
+                // source and dest are either register with addr or variable
                 if src.is_register() {
-                    writeln!(writer, "	mov	rcx, {}", src_str)?;
-                //    writeln!(writer, "	mov	rax, {}", dest_str)?;
+                    writeln!(writer, "	movq	{}, %rcx", src_str)?;
                 } else {
-                    writeln!(writer, "	lea	rcx, {}", src_str)?;
+                    writeln!(writer, "	lea	{} ,%rcx", src_str)?;
                 }
                 if dest.is_register() {
-                    writeln!(writer, "	mov	rax, {}", dest_str)?;
+                    writeln!(writer, "	movq	{} ,%rax", dest_str)?;
                 } else {
-                    writeln!(writer, "	lea	rax, {}", dest_str)?;
+                    writeln!(writer, "	lea	{}, %rax", dest_str)?;
                 }
-                //  writeln!(writer, "	lea	rax, {}", dest_str)?;
-                writeln!(writer, "	mov rdi,rax")?;
-                writeln!(writer, "	mov rsi,rcx ")?;
-                writeln!(writer, "	mov rdi,rax ")?;
-                writeln!(writer, "	mov  ecx, {}", size)?;
-                writeln!(writer, "        rep movsb")?;
+                writeln!(writer, "	movq %rax,%rdi")?;
+                writeln!(writer, "	movq %rcx,%rsi")?;
+                writeln!(writer, "	movq %rax,%rdi ")?;
+                writeln!(writer, "	movl  ${}, %ecx", size)?;
+                writeln!(writer, "  rep movsb")?;
             }
         }
         Ok(())
@@ -509,71 +512,41 @@ impl X64CodeGenerator {
 
             _ => panic!("Invalid register or assembly type"),
         };
-        str.to_string()
+        format!("%{}", str)
     }
     fn get_operand(&mut self, value: &Operand, assembly_type: &AssemblyType) -> Result<String> {
         let val_str = match value {
-            Operand::ImmediateI32(value) => value.to_string(),
-            Operand::ImmediateI64(value) => value.to_string(),
-            Operand::ImmediateU32(value) => value.to_string(),
-            Operand::ImmediateU64(value) => value.to_string(),
-            Operand::ImmediateI8(value) => value.to_string(),
-            Operand::ImmediateU8(value) => value.to_string(),
+            Operand::ImmediateI32(value) => format!("${}", value),
+            Operand::ImmediateI64(value) => format!("${}", value),
+            Operand::ImmediateU32(value) => format!("${}", value),
+            Operand::ImmediateU64(value) => format!("${}", value),
+            Operand::ImmediateI8(value) => format!("${}", value),
+            Operand::ImmediateU8(value) => format!("${}", value),
+            // format!("${}", value),
             // Operand::ImmediateF64(value) => todo!(),
             Operand::Pseudo(_) => panic!("Pseudo register not supported"),
             Operand::Register(register) => Self::get_reg_name(register, assembly_type),
 
             Operand::Memory(register, offset) => {
-                let qual = match assembly_type {
-                    AssemblyType::LongWord => "DWORD",
-                    AssemblyType::QuadWord => "QWORD",
-                    AssemblyType::Byte => "BYTE",
-                    AssemblyType::Word => "WORD",
-                    AssemblyType::Double => "",
-                    AssemblyType::ByteArray(_, _) => "",
-                };
-
                 format!(
-                    "{} [{}{:+}]",
-                    qual,
+                    "{:+}({})",
+                    offset,
                     Self::get_reg_name(register, &AssemblyType::QuadWord),
-                    offset
                 )
             }
             Operand::Data(data, offset) => {
-                let qual = match assembly_type {
-                    AssemblyType::LongWord => "DWORD",
-                    AssemblyType::QuadWord => "QWORD",
-                    AssemblyType::Byte => "BYTE",
-                    AssemblyType::Word => "WORD",
-                    AssemblyType::Double => "",
-                    AssemblyType::ByteArray(_, _) => "",
-                };
-                format!("{} [{}+{}]", qual, data, offset)
+                if *offset == 0 {
+                    format!("{}(%rip)", data)
+                } else {
+                    format!("{}+{}(%rip)", offset, data)
+                }
             }
             Operand::PseudoMem(data, _size, _offset, _align) => {
-                let qual = match assembly_type {
-                    AssemblyType::LongWord => "DWORD",
-                    AssemblyType::QuadWord => "QWORD",
-                    AssemblyType::Byte => "BYTE",
-                    AssemblyType::Word => "WORD",
-                    AssemblyType::Double => "",
-                    AssemblyType::ByteArray(_, _) => "",
-                };
-                format!("{} [{}]", qual, data)
+                format!(" {}", data)
             }
             Operand::Indexed(base, index, scale) => {
-                let qual = match assembly_type {
-                    AssemblyType::LongWord => "DWORD",
-                    AssemblyType::QuadWord => "QWORD",
-                    AssemblyType::Byte => "BYTE",
-                    AssemblyType::Word => "WORD",
-                    AssemblyType::Double => "",
-                    _ => todo!(),
-                };
                 format!(
-                    "{} [{} + {} * {}]",
-                    qual,
+                    " ({} , {} , {})",
                     Self::get_reg_name(base, &AssemblyType::QuadWord),
                     Self::get_reg_name(index, &AssemblyType::QuadWord),
                     scale
@@ -582,12 +555,13 @@ impl X64CodeGenerator {
         };
         Ok(val_str)
     }
-    fn fix_long_immediate(
+    fn fix_big_immediate(
         &mut self,
         operand: &Operand,
         instructions: &mut Vec<Instruction>,
+        fix_32: bool,
     ) -> Operand {
-        match operand {
+        let ret = match operand {
             Operand::ImmediateI64(val) => {
                 if *val > i32::MAX as i64 || *val < i32::MIN as i64 {
                     instructions.push(Instruction::Mov(
@@ -613,11 +587,29 @@ impl X64CodeGenerator {
                 }
             }
             _ => operand.clone(),
+        };
+        if fix_32 {
+            match ret {
+                Operand::ImmediateU32(val) => {
+                    if val & 0x80000000 != 0 {
+                        instructions.push(Instruction::Mov(
+                            AssemblyType::QuadWord,
+                            operand.clone(),
+                            Operand::Register(SCRATCH_REGISTER1),
+                        ));
+                        Operand::Register(SCRATCH_REGISTER1)
+                    } else {
+                        operand.clone()
+                    }
+                }
+                _ => ret.clone(),
+            }
+        } else {
+            ret
         }
     }
     pub fn get_scratch_register1(assembly_type: &AssemblyType) -> Operand {
         match assembly_type {
-            //  AssemblyType::LongWord | AssemblyType::QuadWord => Operand::Register(SCRATCH_REGISTER1),
             AssemblyType::Double => Operand::Register(FLOAT_SCRATCH1),
             _ => Operand::Register(SCRATCH_REGISTER1),
         }
@@ -645,7 +637,6 @@ impl X64CodeGenerator {
             Operand::PseudoMem(_, size, _, align) => AssemblyType::ByteArray(*size, *align),
             Operand::Indexed(_, _, _) => AssemblyType::QuadWord,
             Operand::Pseudo(_) => AssemblyType::QuadWord,
-            // _ => unreachable!(),
         }
     }
     fn fixup_pass(&mut self, function: &Function) -> Result<Vec<Instruction>> {
@@ -654,13 +645,12 @@ impl X64CodeGenerator {
         let mut new_instructions = Vec::new();
         println!("Fixing up function: {}", function.name);
         for instruction in function.instructions.iter() {
-            //   println!("Fixing up instruction: {:?}", instruction);
             match instruction {
                 Instruction::Mov(assembly_type, src, dest) => {
                     let dest_assembly_type = Self::get_assembly_type_from_operand(dest);
                     let new_src = self.fix_pseudo(src, assembly_type)?;
                     let new_dest = self.fix_pseudo(dest, &dest_assembly_type)?;
-                    let new_src = self.fix_long_immediate(&new_src, &mut new_instructions);
+                    let new_src = self.fix_big_immediate(&new_src, &mut new_instructions, false);
                     if Self::is_memory(&new_src) && Self::is_memory(&new_dest) {
                         let scratch = Self::get_scratch_register1(assembly_type);
                         new_instructions.push(Instruction::Mov(
@@ -684,7 +674,7 @@ impl X64CodeGenerator {
                 Instruction::Binary(op, assembly_type, src, dest) => {
                     let new_src = self.fix_pseudo(src, assembly_type)?;
                     let new_dest = self.fix_pseudo(dest, assembly_type)?;
-                    let new_src = self.fix_long_immediate(&new_src, &mut new_instructions);
+                    let new_src = self.fix_big_immediate(&new_src, &mut new_instructions, true);
                     match op {
                         BinaryOperator::Add
                         | BinaryOperator::Sub
@@ -870,7 +860,7 @@ impl X64CodeGenerator {
                 Instruction::Cmp(assembly_type, src, dest) => {
                     let new_dest = self.fix_pseudo(dest, assembly_type)?;
                     let new_src = self.fix_pseudo(src, assembly_type)?;
-                    let new_src = self.fix_long_immediate(&new_src, &mut new_instructions);
+                    let new_src = self.fix_big_immediate(&new_src, &mut new_instructions, true);
                     if Self::is_constant(&new_dest) {
                         let scratch = Self::get_scratch_register2(assembly_type);
                         new_instructions.push(Instruction::Mov(
@@ -910,7 +900,7 @@ impl X64CodeGenerator {
                     ));
                 }
                 Instruction::Push(operand) => {
-                    let operand = self.fix_long_immediate(operand, &mut new_instructions);
+                    let operand = self.fix_big_immediate(operand, &mut new_instructions, true);
                     new_instructions.push(Instruction::Push(
                         self.fix_pseudo(&operand, &AssemblyType::QuadWord)?,
                     ));
@@ -921,13 +911,6 @@ impl X64CodeGenerator {
                     ));
                 }
                 Instruction::Call(name) => {
-                    self.func_table
-                        .entry(name.clone())
-                        .or_insert_with(|| FunctionDesc {
-                            name: name.clone(),
-
-                            external: true,
-                        });
                     new_instructions.push(Instruction::Call(name.clone()));
                 }
                 Instruction::MovSignExtend(src_at, dest_at, src, dest) => {

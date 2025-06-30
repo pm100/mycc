@@ -5,7 +5,7 @@ use crate::{
     parser::Parser,
     symbols::SymbolType,
     tacky::{StaticConstant, TackyProgram},
-    x64::nasmgen::X64CodeGenerator,
+    x64::gnugen::X64CodeGenerator,
 };
 use anyhow::Result;
 
@@ -328,7 +328,7 @@ impl X64BackEnd {
                                 Self::generate_signed_immediate(assembly_type2, 0),
                                 value2.clone(),
                             ));
-                            let exit_label = self.gen_label_name("$nan");
+                            let exit_label = self.gen_label_name("__nan");
                             self.moira(Instruction::JmpCC(CondCode::P, exit_label.clone()));
                             self.moira(Instruction::SetCC(CondCode::E, value2.clone()));
                             self.moira(Instruction::Label(exit_label.clone()));
@@ -397,7 +397,7 @@ impl X64BackEnd {
                         value.clone(),
                         const_0,
                     ));
-                    let exit_label = self.gen_label_name("$nan");
+                    let exit_label = self.gen_label_name("__nan");
                     self.moira(Instruction::JmpCC(CondCode::P, exit_label.clone()));
                     self.moira(Instruction::JmpCC(CondCode::E, label.clone()));
                     self.moira(Instruction::Label(exit_label.clone()));
@@ -639,8 +639,8 @@ impl X64BackEnd {
                         dest.clone(),
                     ));
                 } else {
-                    let label1 = self.gen_label_name("$fp1");
-                    let label2 = self.gen_label_name("$fp2");
+                    let label1 = self.gen_label_name("__fp1");
+                    let label2 = self.gen_label_name("__fp2");
                     let scratch_int =
                         X64CodeGenerator::get_scratch_register1(&AssemblyType::QuadWord);
                     let (const_max, _, _) =
@@ -700,8 +700,8 @@ impl X64BackEnd {
                     ));
                     self.moira(Instruction::Cvtsi2sd(AssemblyType::QuadWord, scratch, dest));
                 } else {
-                    let label1 = self.gen_label_name("$fp1");
-                    let label2 = self.gen_label_name("$fp2");
+                    let label1 = self.gen_label_name("__fp1");
+                    let label2 = self.gen_label_name("__fp2");
                     let scratch1 = X64CodeGenerator::get_scratch_register1(&AssemblyType::QuadWord);
                     let scratch2 = X64CodeGenerator::get_scratch_register2(&AssemblyType::QuadWord);
 
@@ -994,7 +994,7 @@ impl X64BackEnd {
                             nan_val,
                             dest.clone(),
                         ));
-                        let exit_label = self.gen_label_name("$nan");
+                        let exit_label = self.gen_label_name("__nan");
                         self.moira(Instruction::JmpCC(CondCode::P, exit_label.clone()));
                         self.moira(Instruction::SetCC(cc, dest));
                         self.moira(Instruction::Label(exit_label.clone()));

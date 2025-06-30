@@ -1102,7 +1102,7 @@ impl Parser {
                 }
 
                 let field_init = ci.first().unwrap();
-                assert!(sdef.members.is_empty());
+                assert!(!sdef.members.is_empty());
                 let field = sdef.members.first().unwrap();
                 self.process_auto_initializer(value, offset, field_init, &field.stype)?;
             }

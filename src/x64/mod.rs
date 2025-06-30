@@ -1,7 +1,8 @@
+pub mod gnugen;
 pub mod moira;
 pub mod moira_inst;
 pub mod moiragen;
-pub mod nasmgen;
+//pub mod nasmgen;
 // https://users.rust-lang.org/t/how-to-parameterize-a-function-or-macro-by-enum-variant/126398
 #[macro_export]
 macro_rules! expect {

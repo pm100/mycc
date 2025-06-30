@@ -47,6 +47,8 @@ impl<E: std::error::Error + 'static> From<E> for CppError {
 
 fn capture(process: std::process::Child) -> Result<Vec<u8>> {
     let output = process.wait_with_output()?;
+    // println!("capture: {:?}", output);
+
     // return Err(anyhow!(CppError::String("foo".to_string())));
     if !output.status.success() {
         eprintln!(
@@ -64,7 +66,7 @@ fn capture(process: std::process::Child) -> Result<Vec<u8>> {
 
     Ok(output.stdout)
 }
-
+#[derive(Debug)]
 pub enum Compiler {
     GnuClang(PathBuf),
     Msvc(PathBuf),
@@ -87,18 +89,20 @@ impl Compiler {
         } else {
             None
         }
+        // Some(Self::Msvc("cl.exe".into()))
     }
 
     fn preprocess(&self, source: &Path, dest: &Path) -> Result<()> {
         match self {
-            Self::GnuClang(path) => Self::gnu_clang(path, source, dest),
+            Self::GnuClang(path) => Self::gnu_clang(path, source, dest, true),
             Self::Msvc(path) => Self::msvc(path, source, dest),
         }
     }
 
     fn assemble_link(&self, source: &Path, dest: &Path, compile_only: bool) -> Result<()> {
+        println!("assemble_link: {:?} {:?} {:?}", self, source, dest);
         match self {
-            Self::GnuClang(path) => Self::gnu_clang(path, source, dest),
+            Self::GnuClang(path) => Self::gnu_clang(path, source, dest, false),
             Self::Msvc(path) => {
                 let mut path = path.clone();
                 path.set_file_name("ml64.exe");
@@ -108,13 +112,36 @@ impl Compiler {
     }
 
     // Arguments are the same for Clang and Gnu gcc
-    fn gnu_clang(path: &Path, _source: &Path, _dest: &Path) -> Result<()> {
-        let process = Command::new(path)
-            .args(["-nostdinc", "-P", "-E", "-x", "c", "-"])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()?;
+    fn gnu_clang(path: &Path, _source: &Path, _dest: &Path, preproc: bool) -> Result<()> {
+        println!("gnu_clang: {:?} {:?} {:?} ", path, _source, _dest);
+        let process = if preproc {
+            Command::new(path)
+                .args([
+                    "-nostdinc",
+                    "-P",
+                    _source.to_string_lossy().as_ref(),
+                    "-o",
+                    _dest.to_string_lossy().as_ref(),
+                    "-E",
+                ])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()?
+        } else {
+            Command::new(path)
+                .args([
+                    "-nostdinc",
+                    "-P",
+                    _source.to_string_lossy().as_ref(),
+                    "-o",
+                    _dest.to_string_lossy().as_ref(),
+                ])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()?
+        };
 
         // process.stdin.as_mut().unwrap().write_all(code)?;
 
@@ -139,9 +166,19 @@ impl Compiler {
         println!("nasm: {:?} {:?} {:?}", path, source, dest);
 
         let temp_obj = dest.with_extension("obj").display().to_string();
+        // capture(
+        //     Command::new("nasm")
+        //         .args(["-f", "win64", "-o"])
+        //         .arg(temp_obj.clone())
+        //         .arg(source)
+        //         .stdin(Stdio::piped())
+        //         .stdout(Stdio::piped())
+        //         .stderr(Stdio::piped())
+        //         .spawn()?,
+        // )?;
         capture(
-            Command::new("nasm")
-                .args(["-f", "win64", "-o"])
+            Command::new("as")
+                .args(["-o"])
                 .arg(temp_obj.clone())
                 .arg(source)
                 .stdin(Stdio::piped())
