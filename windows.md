@@ -170,35 +170,7 @@ int caller(){
 - the address of the return buffer is passed as the first argument
 - all the other arguments are shifted to the left
 
-So this
-```
-struct s{
-  int x;
-}
-struct s callee(int val){
-  struct s ret = {val * 2};
-  return ret;
-}
-int caller(){
-  struct s ret = callee(5);
-}
-```
-is compiled as
-```
-struct s{
-  int x;
-}
-struct s callee(struct s *retbuff, int val){
-  struct s ret = {val * 2};
-  *retbuff = ret;
-}
-int caller(){
-  struct s retbuff ;
-  callee(&retbuff, 5);
-}
-```
-In theory the callee could operate on `retbuff` directly but in practice thats really hard to do.
-
+This is the same as Unix, except the register used is changed
 
 
 
