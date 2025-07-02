@@ -33,7 +33,7 @@ macro_rules! unary {
     };
 }
 macro_rules! binop_num {
-    ($left:ident,$right:ident, $op:path) => {
+    ($left:ident,$right:ident, $op:expr) => {
         match $left.stype() {
             SymbolType::Int32 => {
                 Value::Int32($op($left.as_int32().unwrap(), $right.as_int32().unwrap()))
@@ -227,7 +227,13 @@ impl Parser {
                                 }
                                 UnaryOperator::Negate => match src.stype() {
                                     SymbolType::Int32 => Value::Int32(-*src.as_int32().unwrap()),
+                                    SymbolType::UInt32 => {
+                                        Value::UInt32((-(*src.as_u_int32().unwrap() as i32)) as u32)
+                                    }
                                     SymbolType::Int64 => Value::Int64(-*src.as_int64().unwrap()),
+                                    SymbolType::UInt64 => {
+                                        Value::UInt64((-(*src.as_u_int64().unwrap() as i64)) as u64)
+                                    }
                                     SymbolType::Double => Value::Double(-*src.as_double().unwrap()),
                                     SymbolType::Char | SymbolType::SChar => {
                                         Value::Char(-*src.as_char().unwrap())
@@ -276,9 +282,38 @@ impl Parser {
                                     right.stype()
                                 );
                             };
+                            if left.is_double() {
+                                // double doesnt support wrapping ops
+                                let result = match op {
+                                    BinaryOperator::Add => Some(Value::Double(
+                                        left.as_double().unwrap() + right.as_double().unwrap(),
+                                    )),
+                                    BinaryOperator::Subtract => Some(Value::Double(
+                                        left.as_double().unwrap() - right.as_double().unwrap(),
+                                    )),
+                                    BinaryOperator::Multiply => Some(Value::Double(
+                                        left.as_double().unwrap() * right.as_double().unwrap(),
+                                    )),
+                                    BinaryOperator::Divide => Some(Value::Double(
+                                        left.as_double().unwrap() / right.as_double().unwrap(),
+                                    )),
+                                    BinaryOperator::Remainder => Some(Value::Double(
+                                        left.as_double().unwrap() % right.as_double().unwrap(),
+                                    )),
+                                    _ => None,
+                                };
+                                match result {
+                                    Some(value) => {
+                                        let ins = Instruction::Copy(value, dest.clone());
+                                        self.tacky.functions[idx].instructions.push(ins);
+                                        continue;
+                                    }
+                                    None => {}
+                                }
+                            }
                             let result = match op {
                                 BinaryOperator::Add => {
-                                    binop_num!(left, right, WrappingAdd::wrapping_add)
+                                    binop_num!(left, right, |x, y| WrappingAdd::wrapping_add(x, y))
                                 }
                                 BinaryOperator::Subtract => {
                                     binop_num!(left, right, WrappingSub::wrapping_sub)
@@ -286,8 +321,20 @@ impl Parser {
                                 BinaryOperator::Multiply => {
                                     binop_num!(left, right, WrappingMul::wrapping_mul)
                                 }
-                                BinaryOperator::Divide => binop_num!(left, right, Div::div),
-                                BinaryOperator::Remainder => binop_num!(left, right, Rem::rem),
+                                BinaryOperator::Divide => {
+                                    if Self::is_zero(right) {
+                                        self.tacky.functions[idx].instructions.push(instruction);
+                                        continue;
+                                    }
+                                    binop_num!(left, right, Div::div)
+                                }
+                                BinaryOperator::Remainder => {
+                                    if Self::is_zero(right) {
+                                        self.tacky.functions[idx].instructions.push(instruction);
+                                        continue;
+                                    }
+                                    binop_num!(left, right, Rem::rem)
+                                }
                                 BinaryOperator::BitAnd => binop_logic!(left, right, BitAnd::bitand),
                                 BinaryOperator::BitXor => {
                                     binop_logic!(left, right, BitXor::bitxor)
