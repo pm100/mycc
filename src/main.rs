@@ -3,7 +3,7 @@ pub mod cpp;
 pub mod declarator;
 pub mod expr;
 pub mod lexer;
-pub mod optimize;
+pub mod optimizer;
 pub mod parser;
 pub mod parser_utils;
 pub mod symbols;
@@ -14,13 +14,14 @@ use anyhow::Result;
 use clap::Parser;
 use codegen::BackEnd;
 use log::{info, LevelFilter};
-use optimize::OptimizeFlags;
 use simplelog::{CombinedLogger, Config, WriteLogger};
 use std::env;
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use x64::moiragen::X64BackEnd;
+
+use crate::optimizer::optimize::{OptimizeFlags, Optimizer};
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -210,7 +211,7 @@ fn build(
     parser.parse()?;
 
     parser.tacky.dump();
-    parser.optimize(optimize_flags)?;
+    Optimizer::optimize(&optimize_flags, &mut parser.tacky)?;
 
     let mut backend = X64BackEnd::new();
     let stub = "mycc_cpp";

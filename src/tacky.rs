@@ -11,7 +11,7 @@ pub struct TackyProgram {
     pub structs: HashMap<String, StructurePtr>,
     current_function: usize,
 }
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Instruction {
     Return(Option<Value>),
     Unary(UnaryOperator, Value, Value),
@@ -36,7 +36,7 @@ pub enum Instruction {
     CopyToOffset(Value, Value, usize),
     CopyFromOffset(Value, usize, Value),
 }
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 
 pub enum UnaryOperator {
     Negate,
@@ -133,7 +133,6 @@ impl Value {
     pub fn is_void_pointer(&self) -> bool {
         if self.is_pointer() {
             if let Value::Variable(_, SymbolType::Pointer(inner)) = self {
-  
                 return matches!(**inner, SymbolType::Void);
             }
         }
