@@ -21,7 +21,7 @@ impl Optimizer {
                     continue;
                 }
                 let mut keep = false;
-                //self.graph.nodes[block_id].alive = false;
+
                 for idx in 0..self.graph.blocks[block_id].predecessors.len() {
                     let pred_id = self.graph.blocks[block_id].predecessors[idx];
 
@@ -71,12 +71,6 @@ impl Optimizer {
                         println!("Removing jump from block {} to block {}", block_id, next);
                         modified = true;
                         self.graph.blocks[block_id].instructions.pop();
-                        // self.graph.blocks[block_id]
-                        //     .successors
-                        //     .retain(|&s| s != next);
-                        // self.graph.blocks[next]
-                        //     .predecessors
-                        //     .retain(|&p| p != block_id);
                     }
                 }
                 if self.graph.blocks[block_id].instructions.is_empty() {
@@ -136,53 +130,9 @@ impl Optimizer {
         }
         println!("Unreachable code elimination complete");
         self.print_graph();
-        // Ok(modified);
-
-        //         }
-        //         1 => {
-        //             let prior = live_list[idx - 1];
-        //             let first = self.graph.blocks[block_id].predecessors[0];
-        //             println!(
-        //                 "Block {} has one predecessor: {} prior {}",
-        //                 block_id, self.graph.blocks[first].id, prior
-        //             );
-        //             first != prior
-        //         }
-        //         _ => {
-        //             // If the block has multiple predecessors, we keep the label
-        //             true
-        //         }
-        //     };
-        //     // if !keep {
-        //     //     // If the next block is not a successor, we remove the jump
-        //     //     println!("Removing label from block {} to block {}", block_id, label);
-        //     //     modified = true;
-        //     //     self.graph.blocks[block_id].instructions.remove(0);
-        //     //     self.graph.blocks[block_id].label = None;
-        //     // }
-        //     if self.graph.blocks[block_id].instructions.is_empty() {
-        //         // If the block has no instructions, we remove it
-        //         println!("Removing empty block {}", block_id);
-        //         modified = true;
-        //         self.kill_block(block_id);
-        //     }
-        // }
-
-        // for idx in 0..live_list.len() - 1 {
-        //     let block_id = live_list[idx];
-        //     if self.graph.nodes[block_id].instructions.len() == 1 {
-        //         if let (Instruction::Label(ref label), _) =
-        //             self.graph.nodes[block_id].instructions.last().unwrap()
-        //         {
-        //             if let Some(ref alias) = self.graph.nodes[live_list[idx + 1]].label {
-        //                 for idx2 in 0..live_list.len(){}
-        //             }
-        //         }
-        //     }
-        // }
 
         println!("Unreachable code elimination complete");
-        //self.print_graph();
+
         Ok(modified)
     }
 }

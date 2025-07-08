@@ -50,45 +50,12 @@ impl Optimizer {
             );
             match instruction {
                 Instruction::Label(label) => {
-                    // if current_block.instructions.is_empty() {
-                    //     println!(
-                    //         "Adding label {} to current block {}",
-                    //         label, current_block.id,
-                    //     );
-                    //     current_block.labels.push(label.clone());
-                    //     //   code_graph.label_map.insert(label.clone(), current_block.id);
-                    //     // current_block
-                    //     //     .instructions
-                    //     //     .push((instruction.clone(), InstructionGraphData {}));
-                    // } else {
-                    //     if !current_block.instructions.is_empty() {
-                    //         code_graph.blocks.push(current_block);
-                    //     }
-                    //     current_block = Block {
-                    //         id: code_graph.blocks.len(),
-                    //         alive: true,
-                    //         labels: vec![label.clone()],
-                    //         instructions: vec![],
-                    //         successors: Vec::new(),
-                    //         predecessors: Vec::new(),
-                    //     };
-                    //     // single_label_block = true;
-                    //     //  code_graph.label_map.insert(label.clone(), current_block.id);
-                    // }
                     if single_label_block {
                         // If the current block is a single label block, we add it to the graph
                         println!("new alias for label: {}", label);
                         jump_aliases
                             .push((label.clone(), current_block.label.clone().unwrap().clone()));
 
-                        // current_block = Block {
-                        //     id: code_graph.blocks.len(),
-                        //     alive: true,
-                        //     label: Some(label.clone()),
-                        //     instructions: vec![],
-                        //     successors: Vec::new(),
-                        //     predecessors: Vec::new(),
-                        // };
                         continue;
                     }
                     if !current_block.instructions.is_empty() {
@@ -116,13 +83,11 @@ impl Optimizer {
                     current_block
                         .instructions
                         .push((instruction.clone(), InstructionGraphData {}));
-                    //      if !current_block.instructions.is_empty() {
                     println!(
                         "jump pushing block: id={} {:?}",
                         current_block.id, instruction
                     );
                     code_graph.blocks.push(current_block.clone());
-                    //   }
                     single_label_block = false;
                     println!("starting  block: {}", code_graph.blocks.len());
                     current_block = Block {
@@ -160,7 +125,6 @@ impl Optimizer {
                             // If the label is an alias, we add it to the label map
                             code_graph.blocks[block_idx].instructions[idx] =
                                 (Instruction::Jump(new.clone()), meta.clone());
-                            // code_graph.label_map.insert(new.clone(), block_idx);
                         }
                     }
                     (Instruction::JumpIfZero(cond, label), meta) => {
@@ -189,33 +153,13 @@ impl Optimizer {
                             // code_graph.label_map.insert(new.clone(), block_idx);
                         }
                     }
-                    //   }  {
-                    //         // If the instruction is a jump, we add it to the label map
-                    //         if Some(alias) = jump_aliases
-                    //             .iter()
-                    //             .find(|(alias, _)| alias == label)
-                    //         {
-                    //             // If the label is an alias, we add it to the label map
-                    //             function.instructions[idx] = Instruction::Jump(alias.clone());
-
-                    //         }
-                    //     }
                     _ => {}
                 }
             }
         }
         Self::print_any_graph(&code_graph);
-        // Self::print_any_graph(&code_graph);
         self.add_edges(&mut code_graph);
-        //self.print_graph(&code_graph);
         Self::print_any_graph(&code_graph);
-        //let new_code = Self::emit_code(&code_graph);
-        //println!("tacky now {:?}", new_code);
-
-        // assert!(
-        //     new_code == function.instructions,
-        //     "Code graph does not match original function instructions"
-        // );
         code_graph
     }
     fn find_block_by_label(graph: &CodeGraph, label: &String) -> Option<usize> {
@@ -224,12 +168,10 @@ impl Optimizer {
             .iter()
             .find(|block| block.label == Some(label.clone()))
             .and_then(|b| Some(b.id));
-        // let ret = graph.label_map.get(label).cloned();
         println!("find_block_by_label: label: {}, ret: {:?}", label, ret);
         ret
     }
     fn add_edge(graph: &mut CodeGraph, from: usize, to: usize) {
-        //  println!("Adding edge from {} to {} {}", from, to, graph.nodes.len());
         let from_block = &mut graph.blocks[from];
         if !from_block.successors.contains(&to) {
             from_block.successors.push(to);
@@ -266,7 +208,6 @@ impl Optimizer {
                 let last = code_graph.blocks[idx].instructions.last().unwrap().clone();
                 (node_id, last)
             };
-            //let last_instr = &node.instructions.last().unwrap();
             let next_id = if node_id == code_graph.blocks.len() - 1 {
                 // Last block, no successors
                 usize::MAX
