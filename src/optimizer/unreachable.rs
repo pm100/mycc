@@ -1,20 +1,10 @@
-use core::hash;
-use std::collections::HashMap;
-
-use crate::{
-    optimizer::optimize::Optimizer,
-    tacky::{Function, Instruction},
-};
+use crate::{optimizer::optimize::Optimizer, tacky::Instruction};
 use anyhow::Result;
-struct User {
-    sname: String,
-}
 impl Optimizer {
     pub fn eliminate_unreachable_code(&mut self) -> Result<bool> {
         let mut modified = false;
-        //  self.print_graph();
         {
-            // unrerachable code elimination
+            // unrerachable block elimination
             for block_id in 1..self.graph.blocks.len() {
                 if !self.graph.blocks[block_id].alive {
                     // If the block is not alive, we skip it
@@ -37,7 +27,7 @@ impl Optimizer {
                     modified = true;
                 };
             }
-            println!("Unreachable code elimination complete");
+            println!("Unreachable block elimination complete");
             self.print_graph();
             let live_list = self
                 .graph
@@ -56,10 +46,9 @@ impl Optimizer {
                         | Instruction::JumpIfZero(_, _)
                         | Instruction::JumpIfNotZero(_, _)
                 ) {
-                    println!("Block {} has a jump instruction: {:?}", block_id, last.0);
                     let mut keep = false;
                     let next = live_list[idx + 1];
-                    println!("Checking successors of block {}: ", next);
+
                     for succ in &self.graph.blocks[block_id].successors {
                         if *succ != next {
                             keep = true;
@@ -84,6 +73,12 @@ impl Optimizer {
             self.print_graph();
 
             // dead label removal
+
+            /*
+            a different algorithm from the book. Loop over the entire function and
+            build a list of all referenced labels
+            Then loop over each block removing labels that are not referenced
+             */
             let live_list = self
                 .graph
                 .blocks
@@ -92,10 +87,9 @@ impl Optimizer {
                 .map(|block| block.id)
                 .collect::<Vec<_>>();
             let mut jump_list = Vec::new();
-            for idx in 0..live_list.len() {
-                let block_id = live_list[idx];
-                for bidx in 0..self.graph.blocks[block_id].instructions.len() {
-                    match self.graph.blocks[block_id].instructions[bidx].0 {
+            for block_id in &live_list {
+                for bidx in 0..self.graph.blocks[*block_id].instructions.len() {
+                    match self.graph.blocks[*block_id].instructions[bidx].0 {
                         Instruction::Jump(ref label) => {
                             jump_list.push(label.clone());
                         }
@@ -109,19 +103,14 @@ impl Optimizer {
                     }
                 }
             }
-            for idx in 0..live_list.len() {
-                let block_id = live_list[idx];
-                if let Some(ref label) = self.graph.blocks[block_id].label {
-                    println!("Block {} has a label instruction: {:?}", block_id, label);
-                    if jump_list.contains(label) {
-                        // If the label is used in a jump instruction, we keep it
-                        println!("Keeping label {} in block {}", label, block_id);
-                    } else {
+            for block_id in &live_list {
+                if let Some(ref label) = self.graph.blocks[*block_id].label {
+                    if !jump_list.contains(label) {
                         // If the label is not used in a jump instruction, we remove it
                         println!("Removing label {} from block {}", label, block_id);
                         modified = true;
-                        self.graph.blocks[block_id].label = None;
-                        self.graph.blocks[block_id]
+                        self.graph.blocks[*block_id].label = None;
+                        self.graph.blocks[*block_id]
                             .instructions
                             .retain(|ins| !matches!(ins.0, Instruction::Label(_)));
                     }
@@ -130,8 +119,6 @@ impl Optimizer {
         }
         println!("Unreachable code elimination complete");
         self.print_graph();
-
-        println!("Unreachable code elimination complete");
 
         Ok(modified)
     }

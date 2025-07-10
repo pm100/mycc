@@ -1,3 +1,11 @@
+/*
+
+Reads the TACKY code and generates the MOIRA code for it
+
+*/
+
+use crate::tacky;
+use core::panic;
 use std::path::Path;
 
 use crate::{
@@ -20,13 +28,6 @@ pub struct X64BackEnd {
     instruction_counter: usize,
     temp_count: usize,
     const_0: String,
-}
-
-use crate::tacky;
-impl Default for X64BackEnd {
-    fn default() -> Self {
-        Self::new()
-    }
 }
 
 impl X64BackEnd {
@@ -261,7 +262,6 @@ impl X64BackEnd {
         Ok(())
     }
     fn gen_instruction(&mut self, instruction: &crate::tacky::Instruction) -> Result<()> {
-        println!("Tacky: {:?}", instruction);
         match instruction {
             tacky::Instruction::Return(value) => {
                 if let Some(value) = value {
@@ -625,139 +625,175 @@ impl X64BackEnd {
             }
             tacky::Instruction::DoubleToUInt(src, dest) => {
                 let (src, src_stype, _) = self.get_value(src);
-                let (dest, _dest_stype, _) = self.get_value(dest);
+                let (dest, dest_stype, _) = self.get_value(dest);
                 let scratch_double = X64CodeGenerator::get_scratch_register1(&AssemblyType::Double);
-                if src_stype == SymbolType::UInt32 {
-                    self.moira(Instruction::Cvttsdsi(
-                        AssemblyType::QuadWord,
-                        src,
-                        scratch_double.clone(),
-                    ));
-                    self.moira(Instruction::Mov(
-                        AssemblyType::LongWord,
-                        scratch_double,
-                        dest.clone(),
-                    ));
-                } else {
-                    let label1 = self.gen_label_name("__fp1");
-                    let label2 = self.gen_label_name("__fp2");
-                    let scratch_int =
-                        X64CodeGenerator::get_scratch_register1(&AssemblyType::QuadWord);
-                    let (const_max, _, _) =
-                        self.get_value(&tacky::Value::Double(9223372036854775808.0));
-                    self.moira(Instruction::FCmp(
-                        AssemblyType::Double,
-                        const_max.clone(),
-                        src.clone(),
-                    ));
-                    self.moira(Instruction::JmpCC(CondCode::AE, label1.clone()));
-                    self.moira(Instruction::Cvttsdsi(
-                        AssemblyType::QuadWord,
-                        src.clone(),
-                        dest.clone(),
-                    ));
-                    self.moira(Instruction::Jmp(label2.clone()));
-                    self.moira(Instruction::Label(label1.clone()));
-                    self.moira(Instruction::Mov(
-                        AssemblyType::Double,
-                        src,
-                        scratch_double.clone(),
-                    ));
-                    self.moira(Instruction::Binary(
-                        BinaryOperator::FSub,
-                        AssemblyType::Double,
-                        const_max.clone(),
-                        scratch_double.clone(),
-                    ));
-                    self.moira(Instruction::Cvttsdsi(
-                        AssemblyType::QuadWord,
-                        scratch_double,
-                        dest.clone(),
-                    ));
-                    self.moira(Instruction::Mov(
-                        AssemblyType::QuadWord,
-                        Operand::ImmediateU64(9223372036854775808),
-                        scratch_int.clone(),
-                    ));
-                    self.moira(Instruction::Binary(
-                        BinaryOperator::Add,
-                        AssemblyType::QuadWord,
-                        scratch_int.clone(),
-                        dest.clone(),
-                    ));
-                    self.moira(Instruction::Label(label2.clone()));
+                let scratch_int = X64CodeGenerator::get_scratch_register1(&AssemblyType::QuadWord);
+                match dest_stype {
+                    SymbolType::UInt32 => {
+                        self.moira(Instruction::Cvttsdsi(
+                            AssemblyType::QuadWord,
+                            src,
+                            scratch_int.clone(),
+                        ));
+                        self.moira(Instruction::Mov(
+                            AssemblyType::LongWord,
+                            scratch_int,
+                            dest.clone(),
+                        ));
+                    }
+                    SymbolType::UInt64 => {
+                        let label1 = self.gen_label_name("__fp1");
+                        let label2 = self.gen_label_name("__fp2");
+
+                        let (const_max, _, _) =
+                            self.get_value(&tacky::Value::Double(9223372036854775808.0));
+                        self.moira(Instruction::FCmp(
+                            AssemblyType::Double,
+                            const_max.clone(),
+                            src.clone(),
+                        ));
+                        self.moira(Instruction::JmpCC(CondCode::AE, label1.clone()));
+                        self.moira(Instruction::Cvttsdsi(
+                            AssemblyType::QuadWord,
+                            src.clone(),
+                            dest.clone(),
+                        ));
+                        self.moira(Instruction::Jmp(label2.clone()));
+                        self.moira(Instruction::Label(label1.clone()));
+                        self.moira(Instruction::Mov(
+                            AssemblyType::Double,
+                            src,
+                            scratch_double.clone(),
+                        ));
+                        self.moira(Instruction::Binary(
+                            BinaryOperator::FSub,
+                            AssemblyType::Double,
+                            const_max.clone(),
+                            scratch_double.clone(),
+                        ));
+                        self.moira(Instruction::Cvttsdsi(
+                            AssemblyType::QuadWord,
+                            scratch_double,
+                            dest.clone(),
+                        ));
+                        self.moira(Instruction::Mov(
+                            AssemblyType::QuadWord,
+                            Operand::ImmediateU64(9223372036854775808),
+                            scratch_int.clone(),
+                        ));
+                        self.moira(Instruction::Binary(
+                            BinaryOperator::Add,
+                            AssemblyType::QuadWord,
+                            scratch_int.clone(),
+                            dest.clone(),
+                        ));
+                        self.moira(Instruction::Label(label2.clone()));
+                    }
+                    SymbolType::UChar => {
+                        let scratch =
+                            X64CodeGenerator::get_scratch_register1(&AssemblyType::QuadWord);
+                        self.moira(Instruction::Cvttsdsi(
+                            AssemblyType::LongWord,
+                            src,
+                            scratch.clone(),
+                        ));
+                        self.moira(Instruction::Mov(AssemblyType::Byte, scratch, dest));
+                    }
+                    _ => panic!("Invalid type for DoubleToUInt: {:?}", src_stype),
                 }
             }
             tacky::Instruction::UIntToDouble(src, dest) => {
                 let (src, src_stype, _) = self.get_value(src);
                 let (dest, _dest_stype, _) = self.get_value(dest);
-                if src_stype == SymbolType::UInt32 {
-                    let scratch = X64CodeGenerator::get_scratch_register1(&AssemblyType::QuadWord);
-                    self.moira(Instruction::Mov(
-                        AssemblyType::LongWord,
-                        src,
-                        scratch.clone(),
-                    ));
-                    self.moira(Instruction::Cvtsi2sd(AssemblyType::QuadWord, scratch, dest));
-                } else {
-                    let label1 = self.gen_label_name("__fp1");
-                    let label2 = self.gen_label_name("__fp2");
-                    let scratch1 = X64CodeGenerator::get_scratch_register1(&AssemblyType::QuadWord);
-                    let scratch2 = X64CodeGenerator::get_scratch_register2(&AssemblyType::QuadWord);
+                match src_stype {
+                    SymbolType::UInt32 => {
+                        let scratch =
+                            X64CodeGenerator::get_scratch_register1(&AssemblyType::QuadWord);
+                        self.moira(Instruction::Mov(
+                            AssemblyType::LongWord,
+                            src,
+                            scratch.clone(),
+                        ));
+                        self.moira(Instruction::Cvtsi2sd(AssemblyType::QuadWord, scratch, dest));
+                    }
+                    SymbolType::UInt64 => {
+                        let label1 = self.gen_label_name("__fp1");
+                        let label2 = self.gen_label_name("__fp2");
+                        let scratch1 =
+                            X64CodeGenerator::get_scratch_register1(&AssemblyType::QuadWord);
+                        let scratch2 =
+                            X64CodeGenerator::get_scratch_register2(&AssemblyType::QuadWord);
 
-                    self.moira(Instruction::Cmp(
-                        AssemblyType::QuadWord,
-                        Self::generate_signed_immediate(AssemblyType::QuadWord, 0),
-                        src.clone(),
-                    ));
-                    self.moira(Instruction::JmpCC(CondCode::L, label1.clone()));
-                    self.moira(Instruction::Cvtsi2sd(
-                        AssemblyType::QuadWord,
-                        src.clone(),
-                        dest.clone(),
-                    ));
-                    self.moira(Instruction::Jmp(label2.clone()));
-                    self.moira(Instruction::Label(label1.clone()));
-                    self.moira(Instruction::Mov(
-                        AssemblyType::QuadWord,
-                        src,
-                        scratch1.clone(),
-                    ));
-                    self.moira(Instruction::Mov(
-                        AssemblyType::QuadWord,
-                        scratch1.clone(),
-                        scratch2.clone(),
-                    ));
-                    self.moira(Instruction::Binary(
-                        BinaryOperator::ShiftRight,
-                        AssemblyType::QuadWord,
-                        Self::generate_signed_immediate(AssemblyType::QuadWord, 1),
-                        scratch2.clone(),
-                    ));
-                    self.moira(Instruction::Binary(
-                        BinaryOperator::BitAnd,
-                        AssemblyType::QuadWord,
-                        Self::generate_signed_immediate(AssemblyType::QuadWord, 1),
-                        scratch1.clone(),
-                    ));
-                    self.moira(Instruction::Binary(
-                        BinaryOperator::BitOr,
-                        AssemblyType::QuadWord,
-                        scratch1.clone(),
-                        scratch2.clone(),
-                    ));
-                    self.moira(Instruction::Cvtsi2sd(
-                        AssemblyType::QuadWord,
-                        scratch2,
-                        dest.clone(),
-                    ));
-                    self.moira(Instruction::Binary(
-                        BinaryOperator::FAdd,
-                        AssemblyType::Double,
-                        dest.clone(),
-                        dest.clone(),
-                    ));
-                    self.moira(Instruction::Label(label2.clone()));
+                        self.moira(Instruction::Cmp(
+                            AssemblyType::QuadWord,
+                            Self::generate_signed_immediate(AssemblyType::QuadWord, 0),
+                            src.clone(),
+                        ));
+                        self.moira(Instruction::JmpCC(CondCode::L, label1.clone()));
+                        self.moira(Instruction::Cvtsi2sd(
+                            AssemblyType::QuadWord,
+                            src.clone(),
+                            dest.clone(),
+                        ));
+                        self.moira(Instruction::Jmp(label2.clone()));
+                        self.moira(Instruction::Label(label1.clone()));
+                        self.moira(Instruction::Mov(
+                            AssemblyType::QuadWord,
+                            src,
+                            scratch1.clone(),
+                        ));
+                        self.moira(Instruction::Mov(
+                            AssemblyType::QuadWord,
+                            scratch1.clone(),
+                            scratch2.clone(),
+                        ));
+                        self.moira(Instruction::Binary(
+                            BinaryOperator::ShiftRight,
+                            AssemblyType::QuadWord,
+                            Self::generate_signed_immediate(AssemblyType::QuadWord, 1),
+                            scratch2.clone(),
+                        ));
+                        self.moira(Instruction::Binary(
+                            BinaryOperator::BitAnd,
+                            AssemblyType::QuadWord,
+                            Self::generate_signed_immediate(AssemblyType::QuadWord, 1),
+                            scratch1.clone(),
+                        ));
+                        self.moira(Instruction::Binary(
+                            BinaryOperator::BitOr,
+                            AssemblyType::QuadWord,
+                            scratch1.clone(),
+                            scratch2.clone(),
+                        ));
+                        self.moira(Instruction::Cvtsi2sd(
+                            AssemblyType::QuadWord,
+                            scratch2,
+                            dest.clone(),
+                        ));
+                        self.moira(Instruction::Binary(
+                            BinaryOperator::FAdd,
+                            AssemblyType::Double,
+                            dest.clone(),
+                            dest.clone(),
+                        ));
+                        self.moira(Instruction::Label(label2.clone()));
+                    }
+                    SymbolType::UChar => {
+                        let scratch1 =
+                            X64CodeGenerator::get_scratch_register1(&AssemblyType::QuadWord);
+                        self.moira(Instruction::MovZeroExtend(
+                            AssemblyType::Byte,
+                            AssemblyType::LongWord,
+                            src,
+                            scratch1.clone(),
+                        ));
+                        self.moira(Instruction::Cvtsi2sd(
+                            AssemblyType::LongWord,
+                            scratch1.clone(),
+                            dest.clone(),
+                        ));
+                    }
+                    _ => panic!("Invalid type for UIntToDouble: {:?}", src_stype),
                 }
             }
             tacky::Instruction::Load(ptr, dest) => {
@@ -1228,7 +1264,6 @@ impl X64BackEnd {
         value: &crate::tacky::Value,
         offset: usize,
     ) -> (Operand, SymbolType) {
-        println!("get_block_mem: {:?} offset {}", value, offset);
         let (name, symbol_type) = value.as_variable().unwrap();
 
         let align = X64CodeGenerator::calculate_alignment(symbol_type);

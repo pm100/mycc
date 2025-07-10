@@ -124,11 +124,17 @@ impl Parser {
                 Token::LogicalAnd => {
                     self.next_token()?;
                     let left_rv = self.make_rvalue(&left)?;
+                    if !left_rv.is_scalar() {
+                        bail!("left operand of && must be scalar");
+                    }
                     let label_false = self.make_label("and_false");
                     let label_end = self.make_label("and_end");
                     self.instruction(Instruction::JumpIfZero(left_rv, label_false.clone()));
                     let right = self.do_expression(Self::precedence(&token) + 1)?;
                     let right = self.make_rvalue(&right)?;
+                    if !right.is_scalar() {
+                        bail!("right operand of && must be scalar");
+                    }
                     self.instruction(Instruction::JumpIfZero(right, label_false.clone()));
 
                     let dest = self.make_temporary(&SymbolType::Int32);
@@ -142,11 +148,18 @@ impl Parser {
                 Token::LogicalOr => {
                     self.next_token()?;
                     let left_rv = self.make_rvalue(&left)?;
+                    if !left_rv.is_scalar() {
+                        bail!("left operand of || must be scalar");
+                    }
                     let label_true = self.make_label("or_true");
                     let label_end = self.make_label("or_end");
                     self.instruction(Instruction::JumpIfNotZero(left_rv, label_true.clone()));
                     let right = self.do_expression(Self::precedence(&token) + 1)?;
+
                     let right = self.make_rvalue(&right)?;
+                    if !right.is_scalar() {
+                        bail!("right operand of || must be scalar");
+                    }
                     self.instruction(Instruction::JumpIfNotZero(right, label_true.clone()));
 
                     let dest = self.make_temporary(&SymbolType::Int32);

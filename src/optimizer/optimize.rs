@@ -1,16 +1,11 @@
 use anyhow::Result;
 use bitflags::bitflags;
-use num_traits::{WrappingAdd, WrappingMul, WrappingShl, WrappingShr, WrappingSub};
-use std::{
-    collections::HashMap,
-    ops::{Add, BitAnd, BitOr, BitXor, Div, Mul, Rem, Shl, Shr, Sub},
-};
+
+use std::collections::HashMap;
 
 use crate::{
     optimizer::graph::CodeGraph,
-    parser::Parser,
-    symbols::SymbolType,
-    tacky::{BinaryOperator, Function, Instruction, TackyProgram, UnaryOperator, Value},
+    tacky::{Function, TackyProgram},
 };
 
 bitflags! {

@@ -2,11 +2,11 @@ use crate::optimizer::optimize::Optimizer;
 
 use crate::{
     symbols::SymbolType,
-    tacky::{BinaryOperator, Function, Instruction, TackyProgram, UnaryOperator, Value},
+    tacky::{BinaryOperator, Function, Instruction, UnaryOperator, Value},
 };
 use anyhow::Result;
 use num_traits::{WrappingAdd, WrappingMul, WrappingShl, WrappingShr, WrappingSub};
-use std::ops::{Add, BitAnd, BitOr, BitXor, Div, Mul, Rem, Shl, Shr, Sub};
+use std::ops::{BitAnd, BitOr, BitXor, Div, Rem};
 
 macro_rules! unary {
     ($src:ident,$op:path) => {
@@ -185,7 +185,7 @@ impl Optimizer {
                     if src.is_constant() {
                         let result = match op {
                             UnaryOperator::Complement => unary!(src, std::ops::Not::not),
-                            UnaryOperator::LogicalNot => Value::Int32(Self::is_zero(&src) as i32),
+                            UnaryOperator::LogicalNot => Value::Int32(Self::is_zero(src) as i32),
                             UnaryOperator::Negate => match src.stype() {
                                 SymbolType::Int32 => Value::Int32(-*src.as_int32().unwrap()),
                                 SymbolType::UInt32 => {
@@ -263,19 +263,18 @@ impl Optimizer {
                                 )),
                                 _ => None,
                             };
-                            match result {
-                                Some(value) => {
-                                    let ins = Instruction::Copy(value, dest.clone());
-                                    function.instructions.push(ins);
-                                    changed = true;
-                                    continue;
-                                }
-                                None => {}
+                            //match result {
+                            if let Some(value) = result {
+                                let ins = Instruction::Copy(value, dest.clone());
+                                function.instructions.push(ins);
+                                changed = true;
+                                continue;
                             }
+                            //  None => {}
                         }
                         let result = match op {
                             BinaryOperator::Add => {
-                                binop_num!(left, right, |x, y| WrappingAdd::wrapping_add(x, y))
+                                binop_num!(left, right, WrappingAdd::wrapping_add)
                             }
                             BinaryOperator::Subtract => {
                                 binop_num!(left, right, WrappingSub::wrapping_sub)

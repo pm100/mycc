@@ -211,7 +211,9 @@ fn build(
     parser.parse()?;
 
     parser.tacky.dump();
-    Optimizer::optimize(&optimize_flags, &mut parser.tacky)?;
+    if !optimize_flags.is_empty() {
+        Optimizer::optimize(&optimize_flags, &mut parser.tacky)?;
+    }
 
     let mut backend = X64BackEnd::new();
     let stub = "mycc_cpp";

@@ -141,11 +141,12 @@ impl X64CodeGenerator {
                             writeln!(writer, " .quad 0x{}", Self::double_to_hex(*value))?
                         }
                         StaticInit::InitString(value, zero) => {
-                            for ch in value.chars() {
-                                writeln!(writer, " .byte 0x{:x}", ch as u8)?;
-                            }
+                            let value = value.replace('\\', "\\\\").replace('"', "\\\"");
                             if *zero {
-                                writeln!(writer, " .byte 0")?;
+                                //        writeln!(writer, " .byte 0")?;
+                                writeln!(writer, " .asciz \"{}\"", value)?;
+                            } else {
+                                writeln!(writer, " .ascii \"{}\"", value)?;
                             }
                         }
                         StaticInit::PointerInit(name) => {
@@ -157,7 +158,7 @@ impl X64CodeGenerator {
         }
 
         for const_value in moira.static_constants.values() {
-            writeln!(writer, ".section .rodata")?;
+            writeln!(writer, ".section .rodata, \"r\"")?;
             if const_value.align != 0 {
                 writeln!(writer, ".align {}", const_value.align)?;
             }
@@ -175,12 +176,11 @@ impl X64CodeGenerator {
                     }
 
                     StaticInit::InitString(value, zero) => {
-                        for ch in value.chars() {
-                            writeln!(writer, " .byte 0x{:x}", ch as u8)?;
-                        }
-
+                        let value = value.replace('\\', "\\\\").replace('"', "\\\"");
                         if *zero {
-                            writeln!(writer, " .byte 0")?;
+                            writeln!(writer, " .asciz \"{}\"", value)?;
+                        } else {
+                            writeln!(writer, " .ascii \"{}\"", value)?;
                         }
                     }
                     _ => unreachable!(),

@@ -1,7 +1,4 @@
-use std::{
-    collections::{BTreeMap, HashMap},
-    hash::Hash,
-};
+use std::collections::HashMap;
 
 use crate::{
     optimizer::optimize::Optimizer,
@@ -11,7 +8,6 @@ use crate::{
 pub struct CodeGraph {
     pub blocks: Vec<Block>,
     pub label_map: HashMap<String, usize>,
-    //pub jump_map: HashMap<String, usize>,
 }
 #[derive(Debug, Clone)]
 pub struct Block {
@@ -107,7 +103,7 @@ impl Optimizer {
                 }
             }
         }
-        if current_block.instructions.len() > 0 {
+        if !current_block.instructions.is_empty() {
             code_graph.blocks.push(current_block);
         }
         for alias in &jump_aliases {
@@ -220,17 +216,17 @@ impl Optimizer {
                     Self::add_edge(code_graph, node_id, usize::MAX);
                 }
                 Instruction::Jump(ref label) => {
-                    let target_id = Self::find_block_by_label(code_graph, &label).unwrap();
+                    let target_id = Self::find_block_by_label(code_graph, label).unwrap();
 
                     Self::add_edge(code_graph, node_id, target_id);
                 }
                 Instruction::JumpIfZero(_, ref label) => {
-                    let target_id = Self::find_block_by_label(code_graph, &label).unwrap();
+                    let target_id = Self::find_block_by_label(code_graph, label).unwrap();
                     Self::add_edge(code_graph, node_id, target_id);
                     Self::add_edge(code_graph, node_id, next_id);
                 }
                 Instruction::JumpIfNotZero(_, ref label) => {
-                    let target_id = Self::find_block_by_label(code_graph, &label).unwrap();
+                    let target_id = Self::find_block_by_label(code_graph, label).unwrap();
                     Self::add_edge(code_graph, node_id, target_id);
                     Self::add_edge(code_graph, node_id, next_id);
                 }
