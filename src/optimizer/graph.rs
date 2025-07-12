@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::{
-    optimizer::optimize::Optimizer,
+    optimizer::{optimize::Optimizer, reaching_copies::ReachingCopy},
     tacky::{Function, Instruction},
 };
 #[derive(Debug, Clone)]
@@ -15,11 +15,14 @@ pub struct Block {
     pub label: Option<String>,
     pub alive: bool,
     pub instructions: Vec<(Instruction, InstructionGraphData)>,
+    pub reaching_copies: Vec<ReachingCopy>,
     pub successors: Vec<usize>,
     pub predecessors: Vec<usize>,
 }
 #[derive(Debug, Clone)]
-pub struct InstructionGraphData {}
+pub struct InstructionGraphData {
+    pub reaching_copies: Vec<ReachingCopy>,
+}
 
 impl Optimizer {
     pub fn build_function_graph(&self, function: &mut Function) -> CodeGraph {
@@ -36,6 +39,7 @@ impl Optimizer {
             instructions: Vec::new(),
             successors: Vec::new(),
             predecessors: Vec::new(),
+            reaching_copies: Vec::new(),
         };
         let mut single_label_block = false;
         let mut jump_aliases = Vec::new();
@@ -66,9 +70,15 @@ impl Optimizer {
                         id: code_graph.blocks.len(),
                         alive: true,
                         label: Some(label.clone()),
-                        instructions: vec![(instruction.clone(), InstructionGraphData {})],
+                        instructions: vec![(
+                            instruction.clone(),
+                            InstructionGraphData {
+                                reaching_copies: Vec::new(),
+                            },
+                        )],
                         successors: Vec::new(),
                         predecessors: Vec::new(),
+                        reaching_copies: Vec::new(),
                     };
                     single_label_block = true;
                 }
@@ -76,9 +86,12 @@ impl Optimizer {
                 | Instruction::JumpIfZero(_, _)
                 | Instruction::JumpIfNotZero(_, _)
                 | Instruction::Return(_) => {
-                    current_block
-                        .instructions
-                        .push((instruction.clone(), InstructionGraphData {}));
+                    current_block.instructions.push((
+                        instruction.clone(),
+                        InstructionGraphData {
+                            reaching_copies: Vec::new(),
+                        },
+                    ));
                     println!(
                         "jump pushing block: id={} {:?}",
                         current_block.id, instruction
@@ -93,13 +106,17 @@ impl Optimizer {
                         instructions: vec![],
                         successors: Vec::new(),
                         predecessors: Vec::new(),
+                        reaching_copies: Vec::new(),
                     };
                 }
                 _ => {
                     single_label_block = false;
-                    current_block
-                        .instructions
-                        .push((instruction.clone(), InstructionGraphData {}));
+                    current_block.instructions.push((
+                        instruction.clone(),
+                        InstructionGraphData {
+                            reaching_copies: Vec::new(),
+                        },
+                    ));
                 }
             }
         }
@@ -257,8 +274,11 @@ impl Optimizer {
         for block in &graph.blocks {
             if block.alive {
                 println!("Block ID: {} Label:{:?}", block.id, block.label);
-                for (instruction, _) in &block.instructions {
+                for (instruction, meta) in &block.instructions {
                     println!("  Instruction: {:?}", instruction);
+                    if meta.reaching_copies.len() > 0 {
+                        println!("  Reaching Copies: {:?}", meta.reaching_copies);
+                    }
                 }
                 println!("  Successors: {:?}", block.successors);
                 println!("  Predecessors: {:?}", block.predecessors);

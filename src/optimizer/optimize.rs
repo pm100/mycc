@@ -1,11 +1,11 @@
 use anyhow::Result;
 use bitflags::bitflags;
 
-use std::collections::HashMap;
+use std::{collections::HashMap, hash::Hash};
 
 use crate::{
     optimizer::graph::CodeGraph,
-    tacky::{Function, TackyProgram},
+    tacky::{Function, StaticVariable, TackyProgram},
 };
 
 bitflags! {
@@ -31,7 +31,7 @@ impl Optimizer {
 
         for idx in 0..program.functions.len() {
             let function = &mut program.functions[idx];
-            optimizer.optimize_function(flags, function)?;
+            optimizer.optimize_function(flags, &mut program.static_variables, function)?;
             //  println!("Function graph for {}: {:?}", function.name, code_graph);
         }
 
@@ -39,7 +39,12 @@ impl Optimizer {
         //   let x = tacky.clone();
         Ok(())
     }
-    fn optimize_function(&mut self, flags: &OptimizeFlags, function: &mut Function) -> Result<()> {
+    fn optimize_function(
+        &mut self,
+        flags: &OptimizeFlags,
+        static_vars: &HashMap<String, StaticVariable>,
+        function: &mut Function,
+    ) -> Result<()> {
         // Apply optimizations to the function
         // For now, just print the function name
         let mut pass = 1;
@@ -58,9 +63,9 @@ impl Optimizer {
             // if flags.contains(OptimizeFlags::DEAD_STORE) {
             //     change_count += self.eliminate_dead_stores()?
             // }
-            // if flags.contains(OptimizeFlags::COPY_PROP) {
-            //     change_count += self.propagate_copies(
-            // }
+            if flags.contains(OptimizeFlags::COPY_PROP) {
+                changed_tacky = self.propagate_copies(static_vars, function)?;
+            }
             if flags.contains(OptimizeFlags::UNREACHABLE) {
                 changed_tacky |= self.eliminate_unreachable_code()?;
             }
